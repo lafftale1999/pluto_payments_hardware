@@ -4,7 +4,8 @@
 typedef enum pluto_event_type {
     EV_RFID,
     EV_KEY,
-    EV_PIN
+    EV_PIN,
+    EV_WIFI
 }pluto_event_type;
 
 typedef struct pluto_event_handle_t {
@@ -14,6 +15,7 @@ typedef struct pluto_event_handle_t {
         struct {char cardNumber[20];}rfid;
         struct {char code[5];}pin;
         struct {char key_pressed;}key;
+        struct {bool isConnected}wifi;
     };
 }pluto_event_handle_t;
 

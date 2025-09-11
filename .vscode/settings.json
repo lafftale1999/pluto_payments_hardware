@@ -21,6 +21,10 @@
     "string_view": "cpp",
     "format": "cpp",
     "span": "cpp",
-    "regex": "cpp"
+    "regex": "cpp",
+    "pluto_system.h": "c",
+    "lcd_1602.h": "c",
+    "rc522_implementation.h": "c",
+    "keypad_implementation.h": "c"
   }
 }

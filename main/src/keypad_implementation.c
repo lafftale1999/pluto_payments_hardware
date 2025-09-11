@@ -1,5 +1,4 @@
 #include "keypad_implementation.h"
-#include "4x4_matrix.h"
 #include "pluto_events.h"
 
 #include "freertos/FreeRTOS.h"

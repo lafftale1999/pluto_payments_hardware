@@ -1,5 +1,6 @@
 #include "wifi_implementation.h"
 #include "credentials.h"
+#include "error_checks.h"
 
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -40,17 +41,16 @@ esp_err_t wifi_init(){
     wifi_event_group = xEventGroupCreate();
 
     esp_err_t ret = ESP_OK;
-    ret = esp_netif_init();
-    ret = esp_event_loop_create_default();
+    ESP_RETURN_ON_ERROR(esp_netif_init(), WIFI_TAG, "esp_netif_init failed");
+    ESP_RETURN_ON_ERROR(esp_event_loop_create_default(), WIFI_TAG, "failed to create event loop");
 
     station_network_interface = esp_netif_create_default_wifi_sta();
 
     wifi_init_config_t config = WIFI_INIT_CONFIG_DEFAULT();
 
-    ret = esp_wifi_init(&config);
-
-    ret = esp_event_handler_register(WIFI_EVENT, ESP_EVENT_ANY_ID, &wifi_event_handler, NULL);
-    ret = esp_event_handler_register(IP_EVENT, IP_EVENT_STA_GOT_IP, &wifi_event_handler, NULL);
+    ESP_RETURN_ON_ERROR(esp_wifi_init(&config), WIFI_TAG, "failed to wifi init with config");
+    ESP_RETURN_ON_ERROR(esp_event_handler_register(WIFI_EVENT, ESP_EVENT_ANY_ID, &wifi_event_handler, NULL), WIFI_TAG, "failed to register wifi events");
+    ESP_RETURN_ON_ERROR(esp_event_handler_register(IP_EVENT, IP_EVENT_STA_GOT_IP, &wifi_event_handler, NULL), WIFI_TAG, "failed to register IP event");
 
     wifi_config_t wifi_config = {
         .sta = {
@@ -59,12 +59,11 @@ esp_err_t wifi_init(){
         },
     };
 
-    ret = esp_wifi_set_mode(WIFI_MODE_STA);
-    ret = esp_wifi_set_config(WIFI_IF_STA, &wifi_config);
-    ret = esp_wifi_start();
+    ESP_RETURN_ON_ERROR(esp_wifi_set_mode(WIFI_MODE_STA), WIFI_TAG, "Failed to set wifi mode");
+    ESP_RETURN_ON_ERROR(esp_wifi_set_config(WIFI_IF_STA, &wifi_config), WIFI_TAG, "Failed to set config");
+    ESP_RETURN_ON_ERROR(esp_wifi_start(), WIFI_TAG, "Failed to start wifi");
 
-    ESP_LOGI(WIFI_TAG, "WiFi init done");
-    return ret;
+    return 0;
 }
 
 bool wifi_is_connected() {
@@ -83,4 +82,8 @@ esp_err_t wait_for_connection(void) {
     ESP_LOGI(WIFI_TAG, "Wifi is connected!");
 
     return ESP_OK;
+}
+
+esp_err_t wifi_destroy() {
+    return esp_wifi_deinit();
 }

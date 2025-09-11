@@ -9,5 +9,6 @@
 esp_err_t wifi_init();
 bool wifi_is_connected();
 esp_err_t wait_for_connection(void);
+esp_err_t wifi_destroy();
 
 #endif
