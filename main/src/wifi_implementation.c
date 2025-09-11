@@ -1,10 +1,12 @@
 #include "wifi_implementation.h"
 #include "credentials.h"
 #include "error_checks.h"
+#include "pluto_events.h"
 
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/event_groups.h"
+#include "freertos/queue.h"
 #include "esp_wifi.h"
 #include "esp_event.h"
 #include "esp_log.h"
@@ -86,4 +88,28 @@ esp_err_t wait_for_connection(void) {
 
 esp_err_t wifi_destroy() {
     return esp_wifi_deinit();
+}
+
+void wifi_check_status (void *args) {
+    QueueHandle_t queue = (QueueHandle_t)args;
+    uint8_t queue_received = 0;
+
+    if (queue != NULL) {
+        queue_received = 1;
+    }
+
+    while (true && queue_received) {
+        if (!wifi_is_connected()) {
+            pluto_event_handle_t event = {
+                .event_type = EV_WIFI,
+                .wifi = false
+            };
+
+            xQueueSend(queue, &event, portMAX_DELAY);
+        }
+
+        vTaskDelay(pdMS_TO_TICKS(5000));
+    }
+
+    vTaskDelete(NULL);
 }

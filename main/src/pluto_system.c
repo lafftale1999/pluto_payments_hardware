@@ -47,6 +47,7 @@ typedef struct pluto_system {
 
 // wifi check task
 
+
 uint8_t plut_system_init(pluto_system_handle_t *handle) {
     if (handle == NULL || *handle != NULL) {
         ESP_LOGE(PLUTO_TAG, "Handle already initialized");
@@ -112,7 +113,7 @@ uint8_t plut_system_init(pluto_system_handle_t *handle) {
     }
 
     *handle = temp_handle;
-
+    // starta wifi check task
     return 0;
 
 exit:
