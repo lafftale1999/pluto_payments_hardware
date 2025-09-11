@@ -1,14 +1,14 @@
 #ifndef PLUTO_APP_EVENTS_H
 #define PLUTO_APP_EVENTS_H
 
-typedef enum pluto_payment_event {
+typedef enum pluto_event_type {
     EV_RFID,
     EV_KEY,
     EV_PIN
-}pluto_payment_event;
+}pluto_event_type;
 
 typedef struct pluto_event_handle_t {
-    pluto_payment_event event_type;
+    pluto_event_type event_type;
 
     union {
         struct {char cardNumber[20];}rfid;
