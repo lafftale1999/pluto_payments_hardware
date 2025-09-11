@@ -18,6 +18,7 @@ static const char *WIFI_TAG = "WIFI";
 EventGroupHandle_t wifi_event_group;
 const int WIFI_CONNECTED_BIT = BIT0;
 static esp_netif_t *station_network_interface = NULL;
+static bool wifi_is_running = true;
 
 static void wifi_event_handler(void *arg, esp_event_base_t event_base,
     int32_t event_id, void *event_data)
@@ -73,43 +74,59 @@ bool wifi_is_connected() {
     return (bits & WIFI_CONNECTED_BIT) != 0;
 }
 
-esp_err_t wait_for_connection(void) {
-    xEventGroupWaitBits(
-        wifi_event_group,   // EventGroup
-        WIFI_CONNECTED_BIT, // EventBit
-        pdFALSE,            // Don't clear bit
-        pdTRUE,             // wait for all bits
-        pdMS_TO_TICKS(WIFI_MAX_WAIT_MS));     // Wait until true
+esp_err_t wifi_wait_for_connection(int wait_time_ms) {
+    EventBits_t event_bits = xEventGroupWaitBits(
+        wifi_event_group,               // EventGroup
+        WIFI_CONNECTED_BIT,             // EventBit
+        pdFALSE,                        // Don't clear bit
+        pdTRUE,                         // wait for all bits
+        pdMS_TO_TICKS(wait_time_ms));   // Wait until true
     
-    ESP_LOGI(WIFI_TAG, "Wifi is connected!");
-
-    return ESP_OK;
+    if (event_bits & WIFI_CONNECTED_BIT) {
+        ESP_LOGI(WIFI_TAG, "Wifi is connected!");
+        return ESP_OK;
+    }
+    
+    return ESP_ERR_WIFI_NOT_CONNECT;
 }
 
 esp_err_t wifi_destroy() {
+    wifi_is_running = false;
     return esp_wifi_deinit();
 }
 
 void wifi_check_status (void *args) {
     QueueHandle_t queue = (QueueHandle_t)args;
-    uint8_t queue_received = 0;
+    bool queue_received = true;
+    
+    /**
+     * Used to keep track on status changes. We only want to add to queue if:
+     * wifi was connected && wifi has disconnected
+    */
+    bool was_connected = false;
+    bool is_connected = false;
 
-    if (queue != NULL) {
-        queue_received = 1;
+    if (queue == NULL) {
+        queue_received = false;
+        ESP_LOGE(WIFI_TAG, "Queue not received in wifi_check_status task");
+        abort();
     }
 
-    while (true && queue_received) {
-        if (!wifi_is_connected()) {
+    while (wifi_is_running && queue_received) {
+        is_connected = wifi_is_connected();
+
+        if (is_connected != was_connected) {
             pluto_event_handle_t event = {
                 .event_type = EV_WIFI,
-                .wifi = false
+                .wifi.isConnected = is_connected
             };
 
+            was_connected = is_connected;
             xQueueSend(queue, &event, portMAX_DELAY);
         }
-
+        
         vTaskDelay(pdMS_TO_TICKS(5000));
     }
-
+    
     vTaskDelete(NULL);
 }

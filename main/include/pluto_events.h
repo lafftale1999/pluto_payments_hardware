@@ -1,6 +1,8 @@
 #ifndef PLUTO_APP_EVENTS_H
 #define PLUTO_APP_EVENTS_H
 
+#include <stdbool.h>
+
 typedef enum pluto_event_type {
     EV_RFID,
     EV_KEY,

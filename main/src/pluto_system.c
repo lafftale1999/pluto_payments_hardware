@@ -12,6 +12,8 @@
 #include "esp_log.h"
 #include "esp_err.h"
 
+#define PLUTO_MENU_WAIT_TIME_MS 10000
+#define PLUTO_WIFI_RECONNECT_TIME_MS 60000
 const char *PLUTO_TAG = "PLUTO_SYSTEM";
 
 typedef struct pluto_payment {
@@ -25,8 +27,7 @@ typedef enum pluto_system_state {
     SYS_CREATE_PAYMENT,
     SYS_MAKE_PAYMENT,
     SYS_CHECK_PAYMENT,
-    SYS_WIFI_DISCONNECTED,
-    SYS_WIFI_CONNECTED
+    SYS_WIFI_RECONNECTED
 }pluto_system_state;
 
 typedef struct pluto_system {
@@ -37,18 +38,93 @@ typedef struct pluto_system {
     i2c_master_dev_handle_t lcd_i2c;
 }pluto_system;
 
+static void pluto_update_state(pluto_system_handle_t handle, pluto_system_state state) {
+    handle->last_state = handle->current_state;
+    handle->current_state = state;
+}
+
+static void pluto_wifi_state_logic(pluto_system_handle_t handle, pluto_event_handle_t event) {
+    if (!event.wifi.isConnected) {
+        lcd_1602_send_string(handle->lcd_i2c, "Wifi lost...\nReconnecting...");
+        ESP_ERROR_CHECK(wifi_wait_for_connection(PLUTO_WIFI_RECONNECT_TIME_MS));
+
+        lcd_1602_send_string(handle->lcd_i2c, "Wifi reconnected");
+        pluto_update_state(handle, SYS_WIFI_RECONNECTED);
+
+        vTaskDelay(pdMS_TO_TICKS(3000));
+    }
+}
+
 // check payment
 
 // make payment
 
+// get user information
+
 // create payment
+static void pluto_create_payment(pluto_system_handle_t handle) {
+    pluto_event_handle_t event;
+
+    
+}
 
 // wakeup
+static void pluto_run_menu(pluto_system_handle_t handle) {
+    pluto_event_handle_t event;
+    
+    pluto_update_state(handle, SYS_WAITING);
+    lcd_1602_send_string("A:New payment\nC:Cancel");
 
-// wifi check task
+    while(true) {
+        if (!xQueueReceive(handle->event_queue, &event, pdMS_TO_TICKS(PLUTO_MENU_WAIT_TIME_MS))) continue;
 
+        if (event.event_type == EV_KEY) {
+            if (event.key.key_pressed == 'A') {
+                // create payment
+            }
+            else if (event.key.key_pressed == 'C') {
+                break;
+            }
+        }
 
-uint8_t plut_system_init(pluto_system_handle_t *handle) {
+        else if (event.event_type == EV_WIFI) {
+            pluto_wifi_state_logic(handle, event);
+            break;
+        }
+    }
+
+    lcd_1602_clear_screen(handle->lcd_i2c);
+}
+
+uint8_t pluto_run(pluto_system_handle_t handle) {
+    if (handle == NULL) {
+        ESP_LOGE(PLUTO_TAG, "Handle not initialized when running");
+        return 1;
+    }
+
+    pluto_event_handle_t event;
+
+    while (true) {
+        if (handle->current_state != SYS_SLEEPING) {
+            xQueueReset(handle->event_queue);
+            pluto_update_state(handle, SYS_SLEEPING);
+        }
+
+        if (!xQueueReceive(handle->event_queue, &event, portMAX_DELAY)) continue;
+        
+        switch (event.event_type) {
+            case EV_KEY:
+                pluto_run_menu(handle);
+                break;
+            
+            case EV_WIFI:
+                pluto_wifi_state_logic(handle, event);
+                break;
+        }
+    }
+}
+
+uint8_t pluto_system_init(pluto_system_handle_t *handle) {
     if (handle == NULL || *handle != NULL) {
         ESP_LOGE(PLUTO_TAG, "Handle already initialized");
         return 1;
@@ -107,13 +183,15 @@ uint8_t plut_system_init(pluto_system_handle_t *handle) {
     }
 
     // WAIT FOR INTERNET CONNECTION
-    if (wait_for_connection() != 0) {
+    if (wifi_wait_for_connection() != 0) {
         ESP_LOGE(PLUTO_TAG, "Failed to connect to Wi-fi");
         goto exit;
     }
 
+    temp_handle->current_state = SYS_SLEEPING;
+
     *handle = temp_handle;
-    // starta wifi check task
+    xTaskCreate(wifi_check_status, "wifi_check_status", 1024, &temp_handle->event_queue, 5, NULL);
     return 0;
 
 exit:

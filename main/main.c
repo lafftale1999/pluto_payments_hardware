@@ -21,9 +21,7 @@ int app_main(void)
     ESP_ERROR_CHECK(ret);
 
     pluto_system_handle_t pluto = NULL;
-    if (plut_system_init(pluto) != 0) {
-        ESP_LOGE(MAIN_TAG, "Unable to initialize alarm system");
-    }
+    ESP_ERROR_CHECK(pluto_system_init(pluto));
 
     while(true) {
         
