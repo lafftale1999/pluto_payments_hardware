@@ -8,5 +8,19 @@
   "idf.toolsPathWin": "C:\\Espressif",
   "idf.customExtraVars": {
     "IDF_TARGET": "esp32"
+  },
+  "files.associations": {
+    "array": "cpp",
+    "chrono": "cpp",
+    "deque": "cpp",
+    "list": "cpp",
+    "string": "cpp",
+    "unordered_map": "cpp",
+    "vector": "cpp",
+    "iterator": "cpp",
+    "string_view": "cpp",
+    "format": "cpp",
+    "span": "cpp",
+    "regex": "cpp"
   }
 }
