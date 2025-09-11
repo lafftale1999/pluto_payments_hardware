@@ -1,0 +1,10 @@
+[submodule "components/lcd_1602_i2c_driver"]
+	path = components/lcd_1602_i2c_driver
+	url = https://github.com/lafftale1999/lcd_1602_i2c_driver.git
+[submodule "components/4x4_keypad"]
+	path = components/4x4_keypad
+	url = https://github.com/lafftale1999/4x4_matrix_keypad_driver.git
+	branch = esp32_version
+[submodule "components/rc522"]
+	path = components/rc522
+	url = https://github.com/lafftale1999/esp-idf-rc522.git
