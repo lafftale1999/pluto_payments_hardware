@@ -21,10 +21,7 @@ int app_main(void)
     ESP_ERROR_CHECK(ret);
 
     pluto_system_handle_t pluto = NULL;
-    ESP_ERROR_CHECK(pluto_system_init(pluto));
+    ESP_ERROR_CHECK(pluto_system_init(&pluto));
 
-    while(true) {
-        
-        vTaskDelay(pdMS_TO_TICKS(50));
-    }
+    return 0;
 }

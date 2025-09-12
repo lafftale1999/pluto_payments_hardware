@@ -43,7 +43,6 @@ static void wifi_event_handler(void *arg, esp_event_base_t event_base,
 esp_err_t wifi_init(){
     wifi_event_group = xEventGroupCreate();
 
-    esp_err_t ret = ESP_OK;
     ESP_RETURN_ON_ERROR(esp_netif_init(), WIFI_TAG, "esp_netif_init failed");
     ESP_RETURN_ON_ERROR(esp_event_loop_create_default(), WIFI_TAG, "failed to create event loop");
 
@@ -65,6 +64,8 @@ esp_err_t wifi_init(){
     ESP_RETURN_ON_ERROR(esp_wifi_set_mode(WIFI_MODE_STA), WIFI_TAG, "Failed to set wifi mode");
     ESP_RETURN_ON_ERROR(esp_wifi_set_config(WIFI_IF_STA, &wifi_config), WIFI_TAG, "Failed to set config");
     ESP_RETURN_ON_ERROR(esp_wifi_start(), WIFI_TAG, "Failed to start wifi");
+
+    ESP_LOGI(WIFI_TAG, "Wifi init done");
 
     return 0;
 }
@@ -115,7 +116,7 @@ void wifi_check_status (void *args) {
     while (wifi_is_running && queue_received) {
         is_connected = wifi_is_connected();
 
-        if (is_connected != was_connected) {
+        if (is_connected != was_connected && !is_connected) {
             pluto_event_handle_t event = {
                 .event_type = EV_WIFI,
                 .wifi.isConnected = is_connected

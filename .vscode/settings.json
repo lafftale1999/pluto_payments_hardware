@@ -28,5 +28,7 @@
     "keypad_implementation.h": "c",
     "stdint.h": "c",
     "queue.h": "c"
-  }
+  },
+  "idf.portWin": "COM3",
+  "idf.flashType": "UART"
 }

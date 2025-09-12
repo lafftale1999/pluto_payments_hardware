@@ -17,7 +17,7 @@ typedef struct pluto_event_handle_t {
         struct {char cardNumber[20];}rfid;
         struct {char code[5];}pin;
         struct {char key_pressed;}key;
-        struct {bool isConnected}wifi;
+        struct {bool isConnected;}wifi;
     };
 }pluto_event_handle_t;
 

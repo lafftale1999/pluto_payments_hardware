@@ -6,6 +6,9 @@
 #include "keypad_implementation.h"
 #include "wifi_implementation.h"
 
+#include <ctype.h>
+#include <string.h>
+
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/queue.h"
@@ -14,6 +17,7 @@
 
 #define PLUTO_MENU_WAIT_TIME_MS 10000
 #define PLUTO_WIFI_RECONNECT_TIME_MS 60000
+#define PLUTO_AMOUNT_MAX_LEN 8
 const char *PLUTO_TAG = "PLUTO_SYSTEM";
 
 typedef struct pluto_payment {
@@ -61,11 +65,116 @@ static void pluto_wifi_state_logic(pluto_system_handle_t handle, pluto_event_han
 
 // get user information
 
+// render amount
+void pluto_render_amount(pluto_system_handle_t handle, char *buf, size_t buf_size, const char *prompt, const char *amount) {
+    
+    memset(buf, ' ', buf_size);
+    buf[buf_size - 1] = '\0';
+    
+    uint8_t copied_chars = 0;
+    uint8_t buf_index = 0;
+    
+    while(*prompt != '\0' && copied_chars <= LCD_1602_SCREEN_CHAR_WIDTH) {
+        buf[buf_index++] = *prompt;
+        prompt++;
+        copied_chars++;
+    }
+
+    size_t amount_len = strlen(amount);
+    if (amount_len > LCD_1602_SCREEN_CHAR_WIDTH) amount_len = LCD_1602_SCREEN_CHAR_WIDTH;
+
+    uint8_t amount_start = buf_size - amount_len - 1;
+
+    for(size_t i = amount_start; i < buf_size - 1; i++) {
+        buf[i] = *amount;
+        amount++;
+    }
+    
+    lcd_1602_send_string(handle->lcd_i2c, buf);
+}
+
 // create payment
 static void pluto_create_payment(pluto_system_handle_t handle) {
     pluto_event_handle_t event;
 
+    char display_string [(LCD_1602_SCREEN_CHAR_WIDTH * LCD_1602_MAX_ROWS) + 1];
     
+    pluto_render_amount(handle, display_string, sizeof(display_string), "Enter Amount:", "0");
+    
+    char amount[PLUTO_AMOUNT_MAX_LEN] = "0";
+    uint8_t chars_entered = 1;
+
+    bool comma_entered = false;
+    uint8_t decimals_entered = 0;
+    uint8_t max_decimals = 2;
+
+    while (true) {
+        if (!xQueueReceive(handle->event_queue, &event, pdMS_TO_TICKS(PLUTO_MENU_WAIT_TIME_MS))) break;
+
+        if (event.event_type == EV_KEY) {
+            if (event.key.key_pressed == 'A') {
+                // Get user information
+                break;
+            }
+
+            else if (event.key.key_pressed == 'C') {
+                break;
+            }
+
+            // Delete entered symbols
+            else if (event.key.key_pressed == 'D') {
+                // If there is amount entered
+                if (chars_entered > 0) {
+                    // if its a comma
+                    if(amount[chars_entered - 1] == ',' ){
+                        comma_entered = false;
+                        decimals_entered = 0;
+                    }
+                    // if its a decimal
+                    else if (comma_entered && decimals_entered > 0) decimals_entered--;
+                    
+                    amount[--chars_entered] = '\0';
+                }
+                
+                // if there's no characters left
+                if (chars_entered == 0) {
+                    amount[0] = '0';
+                    amount[1] = '\0';
+                    chars_entered = 1;
+                }
+
+                pluto_render_amount(handle, display_string, sizeof(display_string), "Enter Amount:", amount);
+            }
+            
+            else if (chars_entered < PLUTO_AMOUNT_MAX_LEN - 1 && decimals_entered < max_decimals) {
+                if (isdigit((unsigned char)event.key.key_pressed)) {
+                    // resetting if its the first entry
+                    if (chars_entered == 1 && amount[0] == '0') chars_entered = 0;
+                    amount[chars_entered++] = event.key.key_pressed;
+                    amount[chars_entered] = '\0';
+                    if (comma_entered) decimals_entered++;
+                }
+                else if (event.key.key_pressed == '*' && !comma_entered) {
+                    if(chars_entered == 0) {
+                        amount[chars_entered++] = '0';
+                    }
+
+                    amount[chars_entered++] = ',';
+                    amount[chars_entered] = '\0';
+                    comma_entered = true;
+                }
+
+                pluto_render_amount(handle, display_string, sizeof(display_string), "Enter Amount:", amount);
+            }
+        }
+
+        else if (event.event_type == EV_WIFI) {
+            pluto_wifi_state_logic(handle, event);
+            break;
+        }
+    }
+
+    lcd_1602_clear_screen(handle->lcd_i2c);
 }
 
 // wakeup
@@ -73,14 +182,15 @@ static void pluto_run_menu(pluto_system_handle_t handle) {
     pluto_event_handle_t event;
     
     pluto_update_state(handle, SYS_WAITING);
-    lcd_1602_send_string("A:New payment\nC:Cancel");
+    lcd_1602_send_string(handle->lcd_i2c, "A:New payment\nC:Cancel");
 
     while(true) {
         if (!xQueueReceive(handle->event_queue, &event, pdMS_TO_TICKS(PLUTO_MENU_WAIT_TIME_MS))) continue;
 
         if (event.event_type == EV_KEY) {
             if (event.key.key_pressed == 'A') {
-                // create payment
+                pluto_create_payment(handle);
+                break;
             }
             else if (event.key.key_pressed == 'C') {
                 break;
@@ -120,6 +230,9 @@ uint8_t pluto_run(pluto_system_handle_t handle) {
             case EV_WIFI:
                 pluto_wifi_state_logic(handle, event);
                 break;
+
+            default:
+                continue;
         }
     }
 }
@@ -129,6 +242,9 @@ uint8_t pluto_system_init(pluto_system_handle_t *handle) {
         ESP_LOGE(PLUTO_TAG, "Handle already initialized");
         return 1;
     }
+
+    bool i2c_is_created = false;
+    bool wifi_is_init = false;
 
     // CREATE TEMPORARY HANDLE
     pluto_system_handle_t temp_handle = (pluto_system_handle_t)calloc(1, sizeof(pluto_system));
@@ -145,7 +261,7 @@ uint8_t pluto_system_init(pluto_system_handle_t *handle) {
     }
 
     // START I2C COMMUNICATION
-    bool i2c_is_created = false;
+    
     i2c_master_bus_handle_t bus_handle;
     if (i2c_open(&bus_handle, &temp_handle->lcd_i2c, DEVICE_ADDRESS) != 0) {
         ESP_LOGE(PLUTO_TAG, "Failed to open i2c communication");
@@ -160,8 +276,11 @@ uint8_t pluto_system_init(pluto_system_handle_t *handle) {
         goto exit;
     }
 
+    const uint8_t keypad_rows[] = KEYPAD_ROW_PINS;
+    const uint8_t keypad_cols[] = KEYPAD_COL_PINS;
+
     // INITIALIZE KEYBOARD
-    if (_4x4_matrix_init(KEYPAD_ROW_PINS, KEYPAD_COL_PINS) != 0) {
+    if (_4x4_matrix_init(keypad_rows, keypad_cols) != 0) {
         ESP_LOGE(PLUTO_TAG, "Failed to initialize keyboard");
         goto exit;
     }
@@ -173,7 +292,6 @@ uint8_t pluto_system_init(pluto_system_handle_t *handle) {
     }
 
     // INITIALIZE WIFI
-    bool wifi_is_init = false;
     lcd_1602_send_string(temp_handle->lcd_i2c, "Connecting to\ninternet...");
     if (wifi_init() != 0) {
         ESP_LOGE(PLUTO_TAG, "Failed to initialize Wi-fi");
@@ -183,7 +301,7 @@ uint8_t pluto_system_init(pluto_system_handle_t *handle) {
     }
 
     // WAIT FOR INTERNET CONNECTION
-    if (wifi_wait_for_connection() != 0) {
+    if (wifi_wait_for_connection(20000) != 0) {
         ESP_LOGE(PLUTO_TAG, "Failed to connect to Wi-fi");
         goto exit;
     }
@@ -191,7 +309,7 @@ uint8_t pluto_system_init(pluto_system_handle_t *handle) {
     temp_handle->current_state = SYS_SLEEPING;
 
     *handle = temp_handle;
-    xTaskCreate(wifi_check_status, "wifi_check_status", 1024, &temp_handle->event_queue, 5, NULL);
+    xTaskCreate(wifi_check_status, "wifi_check_status", 2048, &temp_handle->event_queue, 5, NULL);
     return 0;
 
 exit:

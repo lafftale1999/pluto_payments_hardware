@@ -6,10 +6,11 @@ idf_component_register(
         ${SRC_FILES}
     INCLUDE_DIRS 
         "."
+        "include"
 
     REQUIRES
         rc522
-        4x4_matrix
+        4x4_keypad
         lcd_1602_i2c_driver
         nvs_flash
         esp_wifi
