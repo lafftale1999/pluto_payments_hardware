@@ -1,10 +1,10 @@
 #include "keypad_implementation.h"
-#include "4x4_matrix.h"
 #include "pluto_events.h"
 
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/queue.h"
+#include "esp_log.h"
 
 #include <stdbool.h>
 
@@ -13,7 +13,10 @@ static bool task_is_running = true;
 void _4x4_matrix_task(void *args) {
 
     QueueHandle_t queue = (QueueHandle_t)args;
-    if(queue == NULL) task_is_running = false;
+    if(queue == NULL) {
+        ESP_LOGE("KEYPAD", "Queue not parsed in keypad task");
+        vTaskDelete(NULL);
+    }
 
     char key;
 

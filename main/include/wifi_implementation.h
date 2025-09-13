@@ -8,6 +8,8 @@
 
 esp_err_t wifi_init();
 bool wifi_is_connected();
-esp_err_t wait_for_connection(void);
+esp_err_t wifi_wait_for_connection(int wait_time_ms);
+esp_err_t wifi_destroy();
+void wifi_check_status (void *args);
 
 #endif
