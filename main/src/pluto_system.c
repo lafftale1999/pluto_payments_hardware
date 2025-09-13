@@ -68,6 +68,7 @@ static void pluto_wifi_state_logic(pluto_system_handle_t handle, pluto_event_han
 // render amount
 void pluto_render_amount(pluto_system_handle_t handle, char *buf, size_t buf_size, const char *prompt, const char *amount) {
     
+    // TODO add currency to render for better feedback.
     memset(buf, ' ', buf_size);
     buf[buf_size - 1] = '\0';
     
