@@ -23,5 +23,7 @@ int app_main(void)
     pluto_system_handle_t pluto = NULL;
     ESP_ERROR_CHECK(pluto_system_init(&pluto));
 
+    pluto_run(pluto);
+    
     return 0;
 }

@@ -215,6 +215,8 @@ uint8_t pluto_run(pluto_system_handle_t handle) {
     pluto_event_handle_t event;
 
     while (true) {
+        lcd_1602_clear_screen(handle->lcd_i2c);
+
         if (handle->current_state != SYS_SLEEPING) {
             xQueueReset(handle->event_queue);
             pluto_update_state(handle, SYS_SLEEPING);
@@ -235,6 +237,8 @@ uint8_t pluto_run(pluto_system_handle_t handle) {
                 continue;
         }
     }
+
+    return 0;
 }
 
 uint8_t pluto_system_init(pluto_system_handle_t *handle) {
@@ -261,7 +265,6 @@ uint8_t pluto_system_init(pluto_system_handle_t *handle) {
     }
 
     // START I2C COMMUNICATION
-    
     i2c_master_bus_handle_t bus_handle;
     if (i2c_open(&bus_handle, &temp_handle->lcd_i2c, DEVICE_ADDRESS) != 0) {
         ESP_LOGE(PLUTO_TAG, "Failed to open i2c communication");
@@ -309,7 +312,9 @@ uint8_t pluto_system_init(pluto_system_handle_t *handle) {
     temp_handle->current_state = SYS_SLEEPING;
 
     *handle = temp_handle;
-    xTaskCreate(wifi_check_status, "wifi_check_status", 2048, &temp_handle->event_queue, 5, NULL);
+    xTaskCreate(wifi_check_status, "wifi_check_status", 2048, temp_handle->event_queue, 5, NULL);
+    xTaskCreate(_4x4_matrix_task, "_4x4_matrix_task", KEYPAD_TASK_WORD_SIZE, temp_handle->event_queue, 5, NULL);
+
     return 0;
 
 exit:
