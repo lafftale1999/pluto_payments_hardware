@@ -15,16 +15,21 @@
 #include "esp_log.h"
 #include "esp_err.h"
 
-#define PLUTO_MENU_WAIT_TIME_MS 10000
+#define PLUTO_ERROR_MESSAGE_TIME_MS 2500
+#define PLUTO_MENU_WAIT_TIME_MS 20000
 #define PLUTO_WIFI_RECONNECT_TIME_MS 60000
 #define PLUTO_AMOUNT_MAX_LEN 8
+#define PLUTO_CARD_LENGTH 20
+#define PLUTO_PIN_LENGTH 5
 
 const char *PLUTO_TAG = "PLUTO_SYSTEM";
 const char CURRENCY[] = "SEK";
 
 typedef struct pluto_payment {
-    char payment;
-
+    char amount[PLUTO_AMOUNT_MAX_LEN];
+    char card_number[PLUTO_CARD_LENGTH];
+    char pin_code[PLUTO_PIN_LENGTH];
+    char currency[sizeof(CURRENCY)];
 }pluto_payment;
 
 typedef enum pluto_system_state {
@@ -57,19 +62,11 @@ static void pluto_wifi_state_logic(pluto_system_handle_t handle, pluto_event_han
         lcd_1602_send_string(handle->lcd_i2c, "Wifi reconnected");
         pluto_update_state(handle, SYS_WIFI_RECONNECTED);
 
-        vTaskDelay(pdMS_TO_TICKS(3000));
+        vTaskDelay(pdMS_TO_TICKS(PLUTO_ERROR_MESSAGE_TIME_MS));
     }
 }
 
-// check payment
-
-// make payment
-
-// get user information
-
-// render amount
-void pluto_render_amount(pluto_system_handle_t handle, char *buf, size_t buf_size, const char *prompt, const char *amount) {
-    
+static void pluto_render_amount(pluto_system_handle_t handle, char *buf, size_t buf_size, const char *prompt, const char *amount) {
     memset(buf, ' ', buf_size);
     buf[buf_size - 1] = '\0';
     
@@ -92,9 +89,137 @@ void pluto_render_amount(pluto_system_handle_t handle, char *buf, size_t buf_siz
     lcd_1602_send_string(handle->lcd_i2c, buf);
 }
 
-// create payment
-static void pluto_create_payment(pluto_system_handle_t handle) {
+static void pluto_render_pin(pluto_system_handle_t system_handle,
+                             char *lcd_buffer,
+                             size_t lcd_buffer_size,
+                             const char *header_text,
+                             const char *prompt_text,
+                             uint8_t entered_pin_length)
+{
+    if (lcd_buffer_size < (LCD_1602_SCREEN_CHAR_WIDTH * LCD_1602_MAX_ROWS + 1)) {
+        return;
+    }
+
+    memset(lcd_buffer, ' ', lcd_buffer_size);
+    lcd_buffer[lcd_buffer_size - 1] = '\0';
+
+    size_t header_length = strlen(header_text);
+    if (header_length > LCD_1602_SCREEN_CHAR_WIDTH) {
+        header_length = LCD_1602_SCREEN_CHAR_WIDTH;
+    }
+    memcpy(&lcd_buffer[0], header_text, header_length);
+
+    size_t prompt_length = strlen(prompt_text);
+    if (prompt_length + PLUTO_PIN_LENGTH - 1 > LCD_1602_SCREEN_CHAR_WIDTH) {
+        prompt_length = LCD_1602_SCREEN_CHAR_WIDTH - PLUTO_PIN_LENGTH - 1;
+    }
+    memcpy(&lcd_buffer[LCD_1602_SCREEN_CHAR_WIDTH], prompt_text, prompt_length);
+
+    for (size_t i = 0; i < entered_pin_length; i++) {
+        lcd_buffer[LCD_1602_SCREEN_CHAR_WIDTH + prompt_length + i] = '*';
+    }
+
+    lcd_1602_send_string(system_handle->lcd_i2c, lcd_buffer);
+}
+
+bool get_pin_code(pluto_system_handle_t handle, pluto_payment *payment) {
+    bool pin_code_entered = false;
     pluto_event_handle_t event;
+    char buf[LCD_1602_SCREEN_CHAR_WIDTH * LCD_1602_MAX_ROWS + 1];
+    
+    char header[LCD_1602_SCREEN_CHAR_WIDTH + 1];
+    snprintf(header, sizeof(header), "%s %s", payment->amount, CURRENCY);
+    char prompt[] = "Pin: ";
+    
+    uint8_t pin_code_len = 0;
+    pluto_render_pin(handle, buf, sizeof(buf), header, prompt, pin_code_len);
+
+    while(true) {
+        if (!xQueueReceive(handle->event_queue, &event, pdMS_TO_TICKS(PLUTO_MENU_WAIT_TIME_MS))) {
+            lcd_1602_send_string(handle->lcd_i2c, "Payment failed");
+            vTaskDelay(pdMS_TO_TICKS(PLUTO_ERROR_MESSAGE_TIME_MS));
+            break;
+        }
+
+        if (event.event_type == EV_KEY) {
+            if (isdigit((unsigned char)event.key.key_pressed)) {
+                if (pin_code_len < PLUTO_PIN_LENGTH - 1) {
+                    payment->pin_code[pin_code_len++] = event.key.key_pressed;
+                }
+                if (pin_code_len == PLUTO_PIN_LENGTH - 1) {
+                    payment->pin_code[pin_code_len] = '\0';
+                    pin_code_entered = true;
+                }
+            }
+            else if (event.key.key_pressed == 'A' ) {
+                if (pin_code_entered) break;
+                else {
+                    lcd_1602_send_string(handle->lcd_i2c, "Enter 4 digits");
+                    vTaskDelay(pdMS_TO_TICKS(PLUTO_ERROR_MESSAGE_TIME_MS));
+                    xQueueReset(handle->event_queue);
+                }
+            }
+            else if (event.key.key_pressed == 'D' && pin_code_len > 0) {
+                payment->pin_code[--pin_code_len] = '\0';
+            }
+            else if (event.key.key_pressed == 'C') {
+                lcd_1602_send_string(handle->lcd_i2c, "Payment canceled");
+                vTaskDelay(pdMS_TO_TICKS(PLUTO_ERROR_MESSAGE_TIME_MS));
+                break;
+            }
+            pluto_render_pin(handle, buf, sizeof(buf), header, prompt, pin_code_len);
+        }
+    }
+    
+    return pin_code_entered;
+}
+
+bool get_card_number(pluto_system_handle_t handle, pluto_payment *payment) {
+    bool card_scanned = false;
+    pluto_event_handle_t event;
+
+    lcd_1602_send_string(handle->lcd_i2c, "Scan card...");
+
+    rc522_start(handle->rc522);
+
+    while (true) {
+        if (!xQueueReceive(handle->event_queue, &event, pdMS_TO_TICKS(PLUTO_MENU_WAIT_TIME_MS))) {
+            lcd_1602_send_string(handle->lcd_i2c, "Payment failed");
+        }
+
+        if (event.event_type == EV_RFID) {
+            lcd_1602_send_string(handle->lcd_i2c, "Card scanned...");
+            snprintf(payment->card_number, sizeof(payment->card_number), event.rfid.cardNumber);
+            card_scanned = true;
+            break;
+        }
+        else if (event.event_type == EV_KEY) {
+            if (event.key.key_pressed == 'C') {
+                lcd_1602_send_string(handle->lcd_i2c, "Payment canceled");
+                break;
+            }
+        }
+    }
+    vTaskDelay(pdMS_TO_TICKS(PLUTO_ERROR_MESSAGE_TIME_MS));
+    rc522_pause(handle->rc522);
+    
+    return card_scanned;
+}
+
+// check payment
+
+// make payment
+
+// get user information
+static bool pluto_get_user_information(pluto_system_handle_t handle, pluto_payment *payment) {
+
+    return get_card_number(handle, payment) && get_pin_code(handle, payment);
+}
+
+// create payment
+static bool pluto_create_payment(pluto_system_handle_t handle, pluto_payment *payment) {
+    pluto_event_handle_t event;
+    bool payment_created = false;
 
     char display_string [(LCD_1602_SCREEN_CHAR_WIDTH * LCD_1602_MAX_ROWS) + 1];
     
@@ -112,8 +237,9 @@ static void pluto_create_payment(pluto_system_handle_t handle) {
 
         if (event.event_type == EV_KEY) {
             if (event.key.key_pressed == 'A') {
-                // Get user information
-                break;
+                snprintf(payment->amount, sizeof(payment->amount), amount);
+                snprintf(payment->currency, sizeof(payment->currency), CURRENCY);
+                return payment_created = pluto_get_user_information(handle, payment);
             }
 
             else if (event.key.key_pressed == 'C') {
@@ -174,6 +300,7 @@ static void pluto_create_payment(pluto_system_handle_t handle) {
     }
 
     lcd_1602_clear_screen(handle->lcd_i2c);
+    return false;
 }
 
 // wakeup
@@ -184,11 +311,15 @@ static void pluto_run_menu(pluto_system_handle_t handle) {
     lcd_1602_send_string(handle->lcd_i2c, "A:New payment\nC:Cancel");
 
     while(true) {
-        if (!xQueueReceive(handle->event_queue, &event, pdMS_TO_TICKS(PLUTO_MENU_WAIT_TIME_MS))) continue;
+        if (!xQueueReceive(handle->event_queue, &event, pdMS_TO_TICKS(PLUTO_MENU_WAIT_TIME_MS))) break;
 
         if (event.event_type == EV_KEY) {
             if (event.key.key_pressed == 'A') {
-                pluto_create_payment(handle);
+                pluto_payment payment;
+                if(pluto_create_payment(handle, &payment)) {
+                    // make payment
+                }
+                
                 break;
             }
             else if (event.key.key_pressed == 'C') {
