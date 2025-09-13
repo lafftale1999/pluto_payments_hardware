@@ -18,7 +18,9 @@
 #define PLUTO_MENU_WAIT_TIME_MS 10000
 #define PLUTO_WIFI_RECONNECT_TIME_MS 60000
 #define PLUTO_AMOUNT_MAX_LEN 8
+
 const char *PLUTO_TAG = "PLUTO_SYSTEM";
+const char CURRENCY[] = "SEK";
 
 typedef struct pluto_payment {
     char payment;
@@ -68,7 +70,6 @@ static void pluto_wifi_state_logic(pluto_system_handle_t handle, pluto_event_han
 // render amount
 void pluto_render_amount(pluto_system_handle_t handle, char *buf, size_t buf_size, const char *prompt, const char *amount) {
     
-    // TODO add currency to render for better feedback.
     memset(buf, ' ', buf_size);
     buf[buf_size - 1] = '\0';
     
@@ -81,15 +82,12 @@ void pluto_render_amount(pluto_system_handle_t handle, char *buf, size_t buf_siz
         copied_chars++;
     }
 
+    size_t currency_len = strlen(CURRENCY);
     size_t amount_len = strlen(amount);
-    if (amount_len > LCD_1602_SCREEN_CHAR_WIDTH) amount_len = LCD_1602_SCREEN_CHAR_WIDTH;
+    if (amount_len >  (LCD_1602_SCREEN_CHAR_WIDTH - currency_len)) amount_len = LCD_1602_SCREEN_CHAR_WIDTH - currency_len;
+    uint8_t amount_start = buf_size - amount_len - currency_len - 2;
 
-    uint8_t amount_start = buf_size - amount_len - 1;
-
-    for(size_t i = amount_start; i < buf_size - 1; i++) {
-        buf[i] = *amount;
-        amount++;
-    }
+    snprintf(&buf[amount_start], currency_len + amount_len + 2, "%s %s", amount, CURRENCY);
     
     lcd_1602_send_string(handle->lcd_i2c, buf);
 }
