@@ -5,6 +5,7 @@
 #include "rc522_implementation.h"
 #include "keypad_implementation.h"
 #include "wifi_implementation.h"
+#include "time_sync.h"
 
 #include <ctype.h>
 #include <string.h>
@@ -212,7 +213,6 @@ bool get_card_number(pluto_system_handle_t handle, pluto_payment *payment) {
 
 // get user information
 static bool pluto_get_user_information(pluto_system_handle_t handle, pluto_payment *payment) {
-
     return get_card_number(handle, payment) && get_pin_code(handle, payment);
 }
 
@@ -324,6 +324,10 @@ static void pluto_run_menu(pluto_system_handle_t handle) {
             }
             else if (event.key.key_pressed == 'C') {
                 break;
+            }
+            else if (event.key.key_pressed == '#') {
+                char time[TIME_STRING_SIZE];
+                time_get_current_time(time, sizeof(time));
             }
         }
 

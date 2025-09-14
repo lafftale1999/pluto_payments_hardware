@@ -27,7 +27,10 @@
     "rc522_implementation.h": "c",
     "keypad_implementation.h": "c",
     "stdint.h": "c",
-    "queue.h": "c"
+    "queue.h": "c",
+    "esp_sntp.h": "c",
+    "esp_netif_sntp.h": "c",
+    "esp_err.h": "c"
   },
   "idf.portWin": "COM3",
   "idf.flashType": "UART"
