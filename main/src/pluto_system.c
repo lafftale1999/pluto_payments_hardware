@@ -6,6 +6,7 @@
 #include "keypad_implementation.h"
 #include "wifi_implementation.h"
 #include "time_sync.h"
+#include "security_measures.h"
 
 #include <ctype.h>
 #include <string.h>
@@ -31,6 +32,8 @@ typedef struct pluto_payment {
     char card_number[PLUTO_CARD_LENGTH];
     char pin_code[PLUTO_PIN_LENGTH];
     char currency[sizeof(CURRENCY)];
+    char date[TIME_STRING_SIZE];
+    char nonce[SHA256_OUT_BUF_SIZE];
 }pluto_payment;
 
 typedef enum pluto_system_state {
@@ -93,8 +96,8 @@ static void pluto_render_amount(pluto_system_handle_t handle, char *buf, size_t 
 static void pluto_render_pin(pluto_system_handle_t system_handle,
                              char *lcd_buffer,
                              size_t lcd_buffer_size,
-                             const char *header_text,
-                             const char *prompt_text,
+                             const char *header,
+                             const char *prompt,
                              uint8_t entered_pin_length)
 {
     if (lcd_buffer_size < (LCD_1602_SCREEN_CHAR_WIDTH * LCD_1602_MAX_ROWS + 1)) {
@@ -104,17 +107,17 @@ static void pluto_render_pin(pluto_system_handle_t system_handle,
     memset(lcd_buffer, ' ', lcd_buffer_size);
     lcd_buffer[lcd_buffer_size - 1] = '\0';
 
-    size_t header_length = strlen(header_text);
+    size_t header_length = strlen(header);
     if (header_length > LCD_1602_SCREEN_CHAR_WIDTH) {
         header_length = LCD_1602_SCREEN_CHAR_WIDTH;
     }
-    memcpy(&lcd_buffer[0], header_text, header_length);
+    memcpy(&lcd_buffer[0], header, header_length);
 
-    size_t prompt_length = strlen(prompt_text);
+    size_t prompt_length = strlen(prompt);
     if (prompt_length + PLUTO_PIN_LENGTH - 1 > LCD_1602_SCREEN_CHAR_WIDTH) {
         prompt_length = LCD_1602_SCREEN_CHAR_WIDTH - PLUTO_PIN_LENGTH - 1;
     }
-    memcpy(&lcd_buffer[LCD_1602_SCREEN_CHAR_WIDTH], prompt_text, prompt_length);
+    memcpy(&lcd_buffer[LCD_1602_SCREEN_CHAR_WIDTH], prompt, prompt_length);
 
     for (size_t i = 0; i < entered_pin_length; i++) {
         lcd_buffer[LCD_1602_SCREEN_CHAR_WIDTH + prompt_length + i] = '*';
@@ -317,6 +320,8 @@ static void pluto_run_menu(pluto_system_handle_t handle) {
             if (event.key.key_pressed == 'A') {
                 pluto_payment payment;
                 if(pluto_create_payment(handle, &payment)) {
+                    time_get_current_time(payment.date, sizeof(payment.date));
+                    sec_generate_nonce(payment.nonce, sizeof(payment.nonce));
                     // make payment
                 }
                 

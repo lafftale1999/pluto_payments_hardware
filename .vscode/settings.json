@@ -30,7 +30,8 @@
     "queue.h": "c",
     "esp_sntp.h": "c",
     "esp_netif_sntp.h": "c",
-    "esp_err.h": "c"
+    "esp_err.h": "c",
+    "sha256.h": "c"
   },
   "idf.portWin": "COM3",
   "idf.flashType": "UART"
