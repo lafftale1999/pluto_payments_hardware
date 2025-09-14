@@ -34,6 +34,8 @@ typedef struct pluto_payment {
     char currency[sizeof(CURRENCY)];
     char date[TIME_STRING_SIZE];
     char nonce[SHA256_OUT_BUF_SIZE];
+    char operation[20];
+    char device_id[20];
 }pluto_payment;
 
 typedef enum pluto_system_state {
@@ -322,6 +324,12 @@ static void pluto_run_menu(pluto_system_handle_t handle) {
                 if(pluto_create_payment(handle, &payment)) {
                     time_get_current_time(payment.date, sizeof(payment.date));
                     sec_generate_nonce(payment.nonce, sizeof(payment.nonce));
+                    // add device id (mac address)
+                    // build body - create keys and values
+                    // hash body
+                    // build canonical string (method, url, hashed body)
+                    // create hmac() hash canonical string with device key
+                    // build http request
                     // make payment
                 }
                 
