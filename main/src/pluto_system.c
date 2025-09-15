@@ -5,6 +5,12 @@
 #include "rc522_implementation.h"
 #include "keypad_implementation.h"
 #include "wifi_implementation.h"
+#include "time_sync.h"
+#include "security_measures.h"
+#include "request_formater.h"
+#include "http_implementation.h"
+#include "lcd_render.h"
+#include "credentials.h"
 
 #include <ctype.h>
 #include <string.h>
@@ -14,6 +20,7 @@
 #include "freertos/queue.h"
 #include "esp_log.h"
 #include "esp_err.h"
+#include "esp_mac.h"
 
 #define PLUTO_ERROR_MESSAGE_TIME_MS 2500
 #define PLUTO_MENU_WAIT_TIME_MS 20000
@@ -21,17 +28,13 @@
 #define PLUTO_AMOUNT_MAX_LEN 8
 #define PLUTO_CARD_LENGTH 20
 #define PLUTO_PIN_LENGTH 5
+#define PLUTO_HTTP_HEADER_SIZE 100
+#define MAC_ADDRESS_LEN 18
 
 const char *PLUTO_TAG = "PLUTO_SYSTEM";
 const char CURRENCY[] = "SEK";
 
-typedef struct pluto_payment {
-    char amount[PLUTO_AMOUNT_MAX_LEN];
-    char card_number[PLUTO_CARD_LENGTH];
-    char pin_code[PLUTO_PIN_LENGTH];
-    char currency[sizeof(CURRENCY)];
-}pluto_payment;
-
+// STATE ENUM
 typedef enum pluto_system_state {
     SYS_SLEEPING,
     SYS_WAITING,
@@ -39,15 +42,84 @@ typedef enum pluto_system_state {
     SYS_MAKE_PAYMENT,
     SYS_CHECK_PAYMENT,
     SYS_WIFI_RECONNECTED
-}pluto_system_state;
+} pluto_system_state;
 
+// PAYMENT STRUCT
+typedef struct pluto_payment {
+    char amount[PLUTO_AMOUNT_MAX_LEN];
+    char card_number[PLUTO_CARD_LENGTH];
+    char pin_code[SHA256_OUT_BUF_SIZE];
+    char currency[sizeof(CURRENCY)];
+    char date[TIME_STRING_SIZE];
+    char nonce[SHA256_OUT_BUF_SIZE];
+    char operation[20];
+    char device_id[MAC_ADDRESS_LEN];
+} pluto_payment;
+
+// JSON KEY ENUM
+typedef enum pluto_payment_keys_t {
+    PAYMENT_AMOUNT,
+    PAYMENT_CARD_NUMBER,
+    PAYMENT_PIN_CODE,
+    PAYMENT_CURRENCY,
+    PAYMENT_DATE,
+    PAYMENT_NONCE,
+    PAYMENT_OPERATION,
+    PAYMENT_DEVICE_ID,
+    PAYMENT_KEY_SIZE
+} pluto_payment_keys_t;
+
+// JSON KEYS
+static char *payment_keys[] = {"amount", "card_number", "pin_code", "currency", "date", "nonce", "operation", "device_id"};
+
+// HTTP HEADERS
+typedef enum pluto_payment_http_headers {
+    HTTP_HEADER_CONTENT_TYPE,
+    HTTP_HEADER_AUTHORIZATION,
+    HTTP_HEADER_SIZE
+} pluto_payment_http_headers;
+
+#define PAYMENT_HTTP_HEADERS {"Content-Type", "Authorization"}
+#define PAYMENT_HTTP_VALUES  {"application/json"}
+
+// DEFINITION OF PLUTO HANDLE
 typedef struct pluto_system {
     QueueHandle_t event_queue;
     rc522_handle_t rc522;
     pluto_system_state current_state;
     pluto_system_state last_state;
     i2c_master_dev_handle_t lcd_i2c;
-}pluto_system;
+} pluto_system;
+
+static bool send_request(char *hmac_hashed, char *request_body) {
+    http_request_args_t *args = calloc(1, sizeof(*args));
+    args->caller = xTaskGetCurrentTaskHandle();
+    args->status = ESP_FAIL;
+
+    snprintf(args->hmac, sizeof(args->hmac), "%s", hmac_hashed);
+    snprintf(args->post_data, sizeof(args->post_data), "%s", request_body);
+    snprintf(args->url, sizeof(args->url), "%s%s", PLUTO_URL, PLUTO_PAYMENT_API);
+    
+    ESP_LOGI(PLUTO_TAG, "%s", args->url);
+
+    xTaskCreate(http_post_task, "http_post", HTTP_POST_TASK_STACK_SIZE, args, 5, NULL);
+    ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+
+    free(args);
+
+    return args->status == ESP_OK;
+}
+
+static void pluto_create_values(pluto_payment *payment, char *out_buf[]) {
+    out_buf[PAYMENT_AMOUNT] = payment->amount;
+    out_buf[PAYMENT_CARD_NUMBER] = payment->card_number;
+    out_buf[PAYMENT_PIN_CODE] = payment->pin_code;
+    out_buf[PAYMENT_CURRENCY] = payment->currency;
+    out_buf[PAYMENT_DATE] = payment->date;
+    out_buf[PAYMENT_NONCE] = payment->nonce;
+    out_buf[PAYMENT_OPERATION] = payment->operation;
+    out_buf[PAYMENT_DEVICE_ID] = payment->device_id;
+}
 
 static void pluto_update_state(pluto_system_handle_t handle, pluto_system_state state) {
     handle->last_state = handle->current_state;
@@ -56,6 +128,7 @@ static void pluto_update_state(pluto_system_handle_t handle, pluto_system_state 
 
 static void pluto_wifi_state_logic(pluto_system_handle_t handle, pluto_event_handle_t event) {
     if (!event.wifi.isConnected) {
+        ESP_LOGE(PLUTO_TAG, "WIFI DISCONNECTED");
         lcd_1602_send_string(handle->lcd_i2c, "Wifi lost...\nReconnecting...");
         ESP_ERROR_CHECK(wifi_wait_for_connection(PLUTO_WIFI_RECONNECT_TIME_MS));
 
@@ -66,63 +139,16 @@ static void pluto_wifi_state_logic(pluto_system_handle_t handle, pluto_event_han
     }
 }
 
-static void pluto_render_amount(pluto_system_handle_t handle, char *buf, size_t buf_size, const char *prompt, const char *amount) {
-    memset(buf, ' ', buf_size);
-    buf[buf_size - 1] = '\0';
+static void get_mac_address(pluto_payment *payment) {
+    unsigned char mac[6] = {0};
+    esp_efuse_mac_get_default(mac);
     
-    uint8_t copied_chars = 0;
-    uint8_t buf_index = 0;
-    
-    while(*prompt != '\0' && copied_chars <= LCD_1602_SCREEN_CHAR_WIDTH) {
-        buf[buf_index++] = *prompt;
-        prompt++;
-        copied_chars++;
-    }
+    snprintf(payment->device_id, sizeof(payment->device_id), "%02X:%02X:%02X:%02X:%02X:%02X", mac[0],mac[1],mac[2],mac[3],mac[4],mac[5]);
 
-    size_t currency_len = strlen(CURRENCY);
-    size_t amount_len = strlen(amount);
-    if (amount_len >  (LCD_1602_SCREEN_CHAR_WIDTH - currency_len)) amount_len = LCD_1602_SCREEN_CHAR_WIDTH - currency_len;
-    uint8_t amount_start = buf_size - amount_len - currency_len - 2;
-
-    snprintf(&buf[amount_start], currency_len + amount_len + 2, "%s %s", amount, CURRENCY);
-    
-    lcd_1602_send_string(handle->lcd_i2c, buf);
+    ESP_LOGI(PLUTO_TAG, "%s", payment->device_id);
 }
 
-static void pluto_render_pin(pluto_system_handle_t system_handle,
-                             char *lcd_buffer,
-                             size_t lcd_buffer_size,
-                             const char *header_text,
-                             const char *prompt_text,
-                             uint8_t entered_pin_length)
-{
-    if (lcd_buffer_size < (LCD_1602_SCREEN_CHAR_WIDTH * LCD_1602_MAX_ROWS + 1)) {
-        return;
-    }
-
-    memset(lcd_buffer, ' ', lcd_buffer_size);
-    lcd_buffer[lcd_buffer_size - 1] = '\0';
-
-    size_t header_length = strlen(header_text);
-    if (header_length > LCD_1602_SCREEN_CHAR_WIDTH) {
-        header_length = LCD_1602_SCREEN_CHAR_WIDTH;
-    }
-    memcpy(&lcd_buffer[0], header_text, header_length);
-
-    size_t prompt_length = strlen(prompt_text);
-    if (prompt_length + PLUTO_PIN_LENGTH - 1 > LCD_1602_SCREEN_CHAR_WIDTH) {
-        prompt_length = LCD_1602_SCREEN_CHAR_WIDTH - PLUTO_PIN_LENGTH - 1;
-    }
-    memcpy(&lcd_buffer[LCD_1602_SCREEN_CHAR_WIDTH], prompt_text, prompt_length);
-
-    for (size_t i = 0; i < entered_pin_length; i++) {
-        lcd_buffer[LCD_1602_SCREEN_CHAR_WIDTH + prompt_length + i] = '*';
-    }
-
-    lcd_1602_send_string(system_handle->lcd_i2c, lcd_buffer);
-}
-
-bool get_pin_code(pluto_system_handle_t handle, pluto_payment *payment) {
+static bool pluto_get_pin_code(pluto_system_handle_t handle, pluto_payment *payment) {
     bool pin_code_entered = false;
     pluto_event_handle_t event;
     char buf[LCD_1602_SCREEN_CHAR_WIDTH * LCD_1602_MAX_ROWS + 1];
@@ -131,8 +157,10 @@ bool get_pin_code(pluto_system_handle_t handle, pluto_payment *payment) {
     snprintf(header, sizeof(header), "%s %s", payment->amount, CURRENCY);
     char prompt[] = "Pin: ";
     
+    char pin_code[PLUTO_PIN_LENGTH];
+
     uint8_t pin_code_len = 0;
-    pluto_render_pin(handle, buf, sizeof(buf), header, prompt, pin_code_len);
+    lcd_render_pin(handle->lcd_i2c, buf, sizeof(buf), header, prompt, pin_code_len, PLUTO_PIN_LENGTH);
 
     while(true) {
         if (!xQueueReceive(handle->event_queue, &event, pdMS_TO_TICKS(PLUTO_MENU_WAIT_TIME_MS))) {
@@ -144,15 +172,18 @@ bool get_pin_code(pluto_system_handle_t handle, pluto_payment *payment) {
         if (event.event_type == EV_KEY) {
             if (isdigit((unsigned char)event.key.key_pressed)) {
                 if (pin_code_len < PLUTO_PIN_LENGTH - 1) {
-                    payment->pin_code[pin_code_len++] = event.key.key_pressed;
+                    pin_code[pin_code_len++] = event.key.key_pressed;
                 }
                 if (pin_code_len == PLUTO_PIN_LENGTH - 1) {
-                    payment->pin_code[pin_code_len] = '\0';
+                    pin_code[pin_code_len] = '\0';
                     pin_code_entered = true;
                 }
             }
             else if (event.key.key_pressed == 'A' ) {
-                if (pin_code_entered) break;
+                if (pin_code_entered) {
+                    hash_sha256((const unsigned char*)pin_code, strlen(pin_code), payment->pin_code);
+                    break;
+                } 
                 else {
                     lcd_1602_send_string(handle->lcd_i2c, "Enter 4 digits");
                     vTaskDelay(pdMS_TO_TICKS(PLUTO_ERROR_MESSAGE_TIME_MS));
@@ -160,21 +191,21 @@ bool get_pin_code(pluto_system_handle_t handle, pluto_payment *payment) {
                 }
             }
             else if (event.key.key_pressed == 'D' && pin_code_len > 0) {
-                payment->pin_code[--pin_code_len] = '\0';
+                pin_code[--pin_code_len] = '\0';
             }
             else if (event.key.key_pressed == 'C') {
                 lcd_1602_send_string(handle->lcd_i2c, "Payment canceled");
                 vTaskDelay(pdMS_TO_TICKS(PLUTO_ERROR_MESSAGE_TIME_MS));
                 break;
             }
-            pluto_render_pin(handle, buf, sizeof(buf), header, prompt, pin_code_len);
+            lcd_render_pin(handle->lcd_i2c, buf, sizeof(buf), header, prompt, pin_code_len, PLUTO_PIN_LENGTH);
         }
     }
     
     return pin_code_entered;
 }
 
-bool get_card_number(pluto_system_handle_t handle, pluto_payment *payment) {
+static bool pluto_get_card_number(pluto_system_handle_t handle, pluto_payment *payment) {
     bool card_scanned = false;
     pluto_event_handle_t event;
 
@@ -185,6 +216,7 @@ bool get_card_number(pluto_system_handle_t handle, pluto_payment *payment) {
     while (true) {
         if (!xQueueReceive(handle->event_queue, &event, pdMS_TO_TICKS(PLUTO_MENU_WAIT_TIME_MS))) {
             lcd_1602_send_string(handle->lcd_i2c, "Payment failed");
+            break;
         }
 
         if (event.event_type == EV_RFID) {
@@ -206,24 +238,14 @@ bool get_card_number(pluto_system_handle_t handle, pluto_payment *payment) {
     return card_scanned;
 }
 
-// check payment
+static bool pluto_get_amount(pluto_system_handle_t handle, pluto_payment *payment) {
+    ESP_LOGI(PLUTO_TAG, "Entered get amount");
 
-// make payment
-
-// get user information
-static bool pluto_get_user_information(pluto_system_handle_t handle, pluto_payment *payment) {
-
-    return get_card_number(handle, payment) && get_pin_code(handle, payment);
-}
-
-// create payment
-static bool pluto_create_payment(pluto_system_handle_t handle, pluto_payment *payment) {
     pluto_event_handle_t event;
-    bool payment_created = false;
-
+    
     char display_string [(LCD_1602_SCREEN_CHAR_WIDTH * LCD_1602_MAX_ROWS) + 1];
     
-    pluto_render_amount(handle, display_string, sizeof(display_string), "Enter Amount:", "0");
+    lcd_render_amount(handle->lcd_i2c, display_string, sizeof(display_string), "Enter Amount:", "0", CURRENCY);
     
     char amount[PLUTO_AMOUNT_MAX_LEN] = "0";
     uint8_t chars_entered = 1;
@@ -232,14 +254,25 @@ static bool pluto_create_payment(pluto_system_handle_t handle, pluto_payment *pa
     uint8_t decimals_entered = 0;
     uint8_t max_decimals = 2;
 
+    configASSERT(handle && handle->event_queue);
+    ESP_LOGI(PLUTO_TAG, "After assers");
+
+    ESP_LOGD(PLUTO_TAG, "queue=%p msgs=%u spaces=%u sched=%ld",
+            (void*)handle->event_queue,
+            (unsigned)uxQueueMessagesWaiting(handle->event_queue),
+            (unsigned)uxQueueSpacesAvailable(handle->event_queue),
+            (long)xTaskGetSchedulerState());
+
     while (true) {
+        
         if (!xQueueReceive(handle->event_queue, &event, pdMS_TO_TICKS(PLUTO_MENU_WAIT_TIME_MS))) break;
+        ESP_LOGI(PLUTO_TAG, "EVENT RECEIVED");
 
         if (event.event_type == EV_KEY) {
             if (event.key.key_pressed == 'A') {
-                snprintf(payment->amount, sizeof(payment->amount), amount);
-                snprintf(payment->currency, sizeof(payment->currency), CURRENCY);
-                return payment_created = pluto_get_user_information(handle, payment);
+                snprintf(payment->amount, sizeof(payment->amount), "%s", amount);
+                snprintf(payment->currency, sizeof(payment->currency), "%s", CURRENCY);
+                return true;
             }
 
             else if (event.key.key_pressed == 'C') {
@@ -268,7 +301,7 @@ static bool pluto_create_payment(pluto_system_handle_t handle, pluto_payment *pa
                     chars_entered = 1;
                 }
 
-                pluto_render_amount(handle, display_string, sizeof(display_string), "Enter Amount:", amount);
+                lcd_render_amount(handle->lcd_i2c, display_string, sizeof(display_string), "Enter Amount:", amount, CURRENCY);
             }
             
             else if (chars_entered < PLUTO_AMOUNT_MAX_LEN - 1 && decimals_entered < max_decimals) {
@@ -289,18 +322,74 @@ static bool pluto_create_payment(pluto_system_handle_t handle, pluto_payment *pa
                     comma_entered = true;
                 }
 
-                pluto_render_amount(handle, display_string, sizeof(display_string), "Enter Amount:", amount);
+                lcd_render_amount(handle->lcd_i2c, display_string, sizeof(display_string), "Enter Amount:", amount, CURRENCY);
             }
         }
 
         else if (event.event_type == EV_WIFI) {
+            ESP_LOGI(PLUTO_TAG, "Wifi event received");
             pluto_wifi_state_logic(handle, event);
             break;
         }
+
+        ESP_LOGI(PLUTO_TAG, "Bottom of loop");
+    }
+
+    return false;
+}
+
+// create payment
+static void pluto_create_payment(pluto_system_handle_t handle) {
+
+    pluto_payment payment = {
+        .operation = "send_payment"
+    };
+
+    ESP_LOGI(PLUTO_TAG, "Entered create payment");
+
+    if (pluto_get_amount(handle, &payment) &&
+        pluto_get_card_number(handle, &payment) &&
+        pluto_get_pin_code(handle, &payment))
+        {
+        
+        lcd_1602_send_string(handle->lcd_i2c, "Verifying ...");
+
+        // get important values
+        time_get_current_time(payment.date, sizeof(payment.date));
+        sec_generate_nonce(payment.nonce, sizeof(payment.nonce));
+        get_mac_address(&payment);
+        
+        // create request body
+        char *payment_values[PAYMENT_KEY_SIZE] = {0};
+        char request_body[HTTP_REQUEST_BODY_SIZE] = {0};
+        pluto_create_values(&payment, payment_values);
+        create_request_body((const char **)payment_keys, (const char **)payment_values, PAYMENT_KEY_SIZE, request_body, sizeof(request_body));
+
+        ESP_LOGI(PLUTO_TAG, "%s", request_body);
+        
+        // hash body
+        char hashed_body[SHA256_OUT_BUF_SIZE] = {0};
+        hash_sha256((const unsigned char*) request_body, strlen(request_body), hashed_body);
+        ESP_LOGI(PLUTO_TAG, "%s", hashed_body);
+
+        // create HMAC
+        char device_key[] = DEVICE_KEY;
+        char canonical_string[CANONICAL_STRING_SIZE] = {0};
+        char hmac_hashed[SHA256_OUT_BUF_SIZE] = {0};
+        build_canonical_string(hashed_body, canonical_string, sizeof(canonical_string));
+        strncat(canonical_string, device_key, sizeof(canonical_string) - strlen(canonical_string));
+        hash_sha256((const unsigned char*) canonical_string, strlen(canonical_string), hmac_hashed);
+
+        if (send_request(hmac_hashed, request_body)) {
+            lcd_1602_send_string(handle->lcd_i2c, "Approved!");
+        } else {
+            lcd_1602_send_string(handle->lcd_i2c, "Declined");
+        }
+
+        vTaskDelay(pdMS_TO_TICKS(PLUTO_ERROR_MESSAGE_TIME_MS));
     }
 
     lcd_1602_clear_screen(handle->lcd_i2c);
-    return false;
 }
 
 // wakeup
@@ -315,15 +404,15 @@ static void pluto_run_menu(pluto_system_handle_t handle) {
 
         if (event.event_type == EV_KEY) {
             if (event.key.key_pressed == 'A') {
-                pluto_payment payment;
-                if(pluto_create_payment(handle, &payment)) {
-                    // make payment
-                }
-                
+                pluto_create_payment(handle);
                 break;
             }
             else if (event.key.key_pressed == 'C') {
                 break;
+            }
+            else if (event.key.key_pressed == '#') {
+                char time[TIME_STRING_SIZE];
+                time_get_current_time(time, sizeof(time));
             }
         }
 
@@ -438,6 +527,7 @@ uint8_t pluto_system_init(pluto_system_handle_t *handle) {
         ESP_LOGE(PLUTO_TAG, "Failed to connect to Wi-fi");
         goto exit;
     }
+    lcd_1602_send_string(temp_handle->lcd_i2c, "Connected!");
 
     temp_handle->current_state = SYS_SLEEPING;
 

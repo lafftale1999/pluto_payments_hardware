@@ -18,4 +18,5 @@ idf_component_register(
         esp_netif
         mbedtls
         esp_http_client
+        lwip
 )
