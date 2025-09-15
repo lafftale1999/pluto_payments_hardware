@@ -74,6 +74,7 @@ void http_post_task(void *pvParameters) {
 
     esp_http_client_set_method(client, HTTP_METHOD_POST);
     esp_http_client_set_header(client, "Content-Type", "application/json");
+    esp_http_client_set_header(client, "Authorization", (const char *)args->hmac);
     esp_http_client_set_post_field(client, args->post_data, strlen(args->post_data));
 
     esp_err_t ret = esp_http_client_perform(client);

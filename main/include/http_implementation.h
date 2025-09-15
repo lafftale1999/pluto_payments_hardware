@@ -7,13 +7,14 @@
 
 #define HTTP_MAX_URL_SIZE           255
 #define MAX_HTTP_OUTPUT_BUFFER      2048
-#define HTTP_REQUEST_BODY_SIZE      256
-#define HTTP_POST_TASK_STACK_SIZE   4096
+#define HTTP_REQUEST_BODY_SIZE      512
+#define HTTP_POST_TASK_STACK_SIZE   6144
 
 typedef struct {
     char url[HTTP_MAX_URL_SIZE];
     TaskHandle_t caller;
     esp_err_t status;
+    char hmac[65];
     char response_buffer[MAX_HTTP_OUTPUT_BUFFER];
     char post_data[HTTP_REQUEST_BODY_SIZE];
 } http_request_args_t;

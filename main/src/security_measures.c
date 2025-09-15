@@ -6,6 +6,7 @@
 #include "esp_log.h"
 #include "esp_mac.h"
 #include "mbedtls/sha256.h"
+#include "credentials.h"
 
 #include <string.h>
 
@@ -13,10 +14,17 @@ const char *HASH_TAG = "SHA256";
 
 void sec_generate_nonce(char *out_buf, size_t buf_len) {
     uint32_t random_number = esp_random();
-    const unsigned char temp_buf[11];
-    snprintf(temp_buf, sizeof(temp_buf), "%d", random_number);
+    char temp_buf[11];
+    snprintf(temp_buf, sizeof(temp_buf), "%lu", (unsigned long)random_number);
+    hash_sha256((const unsigned char*)temp_buf, sizeof(temp_buf), out_buf);
+}
 
-    hash_sha256(temp_buf, sizeof(temp_buf), out_buf);
+void build_canonical_string(const char *hashed_body, char *out_buf, size_t out_buf_size) {
+    strncat(out_buf, "POST\n", out_buf_size);
+    strncat(out_buf, PLUTO_URL, out_buf_size - strlen(out_buf));
+    strncat(out_buf, PLUTO_PAYMENT_API, out_buf_size - strlen(out_buf));
+    strncat(out_buf, "\nContent-Type: application/json\n", out_buf_size - strlen(out_buf));
+    strncat(out_buf, hashed_body, out_buf_size - strlen(out_buf));
 }
 
 esp_err_t hash_sha256(const unsigned char *input_buffer, size_t input_buffer_len, char hex_output_buffer[SHA256_OUT_BUF_SIZE]) {
