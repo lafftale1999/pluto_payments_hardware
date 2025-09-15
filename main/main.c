@@ -13,7 +13,7 @@ const char* MAIN_TAG = "MAIN";
 
 int app_main(void)
 {
-    vTaskDelay(pdMS_TO_TICKS(5000));
+    vTaskDelay(pdMS_TO_TICKS(2000));
 
     // initialize NVS
     esp_err_t ret = nvs_flash_init();

@@ -91,6 +91,25 @@ typedef struct pluto_system {
     i2c_master_dev_handle_t lcd_i2c;
 } pluto_system;
 
+static bool send_request(char *hmac_hashed, char *request_body) {
+    http_request_args_t *args = calloc(1, sizeof(*args));
+    args->caller = xTaskGetCurrentTaskHandle();
+    args->status = ESP_FAIL;
+
+    snprintf(args->hmac, sizeof(args->hmac), "%s", hmac_hashed);
+    snprintf(args->post_data, sizeof(args->post_data), "%s", request_body);
+    snprintf(args->url, sizeof(args->url), "%s%s", PLUTO_URL, PLUTO_PAYMENT_API);
+    
+    ESP_LOGI(PLUTO_TAG, "%s", args->url);
+
+    xTaskCreate(http_post_task, "http_post", HTTP_POST_TASK_STACK_SIZE, args, 5, NULL);
+    ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+
+    free(args);
+
+    return args->status == ESP_OK;
+}
+
 static void pluto_create_values(pluto_payment *payment, char *out_buf[]) {
     out_buf[PAYMENT_AMOUNT] = payment->amount;
     out_buf[PAYMENT_CARD_NUMBER] = payment->card_number;
@@ -109,6 +128,7 @@ static void pluto_update_state(pluto_system_handle_t handle, pluto_system_state 
 
 static void pluto_wifi_state_logic(pluto_system_handle_t handle, pluto_event_handle_t event) {
     if (!event.wifi.isConnected) {
+        ESP_LOGE(PLUTO_TAG, "WIFI DISCONNECTED");
         lcd_1602_send_string(handle->lcd_i2c, "Wifi lost...\nReconnecting...");
         ESP_ERROR_CHECK(wifi_wait_for_connection(PLUTO_WIFI_RECONNECT_TIME_MS));
 
@@ -119,15 +139,13 @@ static void pluto_wifi_state_logic(pluto_system_handle_t handle, pluto_event_han
     }
 }
 
-static bool get_mac_address(pluto_payment *payment) {
+static void get_mac_address(pluto_payment *payment) {
     unsigned char mac[6] = {0};
     esp_efuse_mac_get_default(mac);
     
     snprintf(payment->device_id, sizeof(payment->device_id), "%02X:%02X:%02X:%02X:%02X:%02X", mac[0],mac[1],mac[2],mac[3],mac[4],mac[5]);
 
     ESP_LOGI(PLUTO_TAG, "%s", payment->device_id);
-
-    return true;
 }
 
 static bool pluto_get_pin_code(pluto_system_handle_t handle, pluto_payment *payment) {
@@ -198,6 +216,7 @@ static bool pluto_get_card_number(pluto_system_handle_t handle, pluto_payment *p
     while (true) {
         if (!xQueueReceive(handle->event_queue, &event, pdMS_TO_TICKS(PLUTO_MENU_WAIT_TIME_MS))) {
             lcd_1602_send_string(handle->lcd_i2c, "Payment failed");
+            break;
         }
 
         if (event.event_type == EV_RFID) {
@@ -220,6 +239,8 @@ static bool pluto_get_card_number(pluto_system_handle_t handle, pluto_payment *p
 }
 
 static bool pluto_get_amount(pluto_system_handle_t handle, pluto_payment *payment) {
+    ESP_LOGI(PLUTO_TAG, "Entered get amount");
+
     pluto_event_handle_t event;
     
     char display_string [(LCD_1602_SCREEN_CHAR_WIDTH * LCD_1602_MAX_ROWS) + 1];
@@ -233,13 +254,24 @@ static bool pluto_get_amount(pluto_system_handle_t handle, pluto_payment *paymen
     uint8_t decimals_entered = 0;
     uint8_t max_decimals = 2;
 
+    configASSERT(handle && handle->event_queue);
+    ESP_LOGI(PLUTO_TAG, "After assers");
+
+    ESP_LOGD(PLUTO_TAG, "queue=%p msgs=%u spaces=%u sched=%ld",
+            (void*)handle->event_queue,
+            (unsigned)uxQueueMessagesWaiting(handle->event_queue),
+            (unsigned)uxQueueSpacesAvailable(handle->event_queue),
+            (long)xTaskGetSchedulerState());
+
     while (true) {
+        
         if (!xQueueReceive(handle->event_queue, &event, pdMS_TO_TICKS(PLUTO_MENU_WAIT_TIME_MS))) break;
+        ESP_LOGI(PLUTO_TAG, "EVENT RECEIVED");
 
         if (event.event_type == EV_KEY) {
             if (event.key.key_pressed == 'A') {
-                snprintf(payment->amount, sizeof(payment->amount), amount);
-                snprintf(payment->currency, sizeof(payment->currency), CURRENCY);
+                snprintf(payment->amount, sizeof(payment->amount), "%s", amount);
+                snprintf(payment->currency, sizeof(payment->currency), "%s", CURRENCY);
                 return true;
             }
 
@@ -295,20 +327,25 @@ static bool pluto_get_amount(pluto_system_handle_t handle, pluto_payment *paymen
         }
 
         else if (event.event_type == EV_WIFI) {
+            ESP_LOGI(PLUTO_TAG, "Wifi event received");
             pluto_wifi_state_logic(handle, event);
             break;
         }
+
+        ESP_LOGI(PLUTO_TAG, "Bottom of loop");
     }
 
     return false;
 }
 
 // create payment
-static bool pluto_create_payment(pluto_system_handle_t handle) {
+static void pluto_create_payment(pluto_system_handle_t handle) {
 
     pluto_payment payment = {
         .operation = "send_payment"
     };
+
+    ESP_LOGI(PLUTO_TAG, "Entered create payment");
 
     if (pluto_get_amount(handle, &payment) &&
         pluto_get_card_number(handle, &payment) &&
@@ -337,35 +374,22 @@ static bool pluto_create_payment(pluto_system_handle_t handle) {
 
         // create HMAC
         char device_key[] = DEVICE_KEY;
-        char canonical_string[CANONICAL_STRING_SIZE];
+        char canonical_string[CANONICAL_STRING_SIZE] = {0};
         char hmac_hashed[SHA256_OUT_BUF_SIZE] = {0};
         build_canonical_string(hashed_body, canonical_string, sizeof(canonical_string));
         strncat(canonical_string, device_key, sizeof(canonical_string) - strlen(canonical_string));
         hash_sha256((const unsigned char*) canonical_string, strlen(canonical_string), hmac_hashed);
-        
-        http_request_args_t http_args = {
-            .caller = xTaskGetCurrentTaskHandle(),
-            .hmac = hmac_hashed,
-            .post_data = request_body,
-            .status = ESP_FAIL,
-        };
 
-        snprintf(http_args.url, sizeof(http_args.url), "%s%s", PLUTO_URL, PLUTO_PAYMENT_API);
-
-        xTaskCreate(http_post_task, "http_post", HTTP_POST_TASK_STACK_SIZE, &http_args, 5, NULL);
-        ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
-
-        if (http_args.status == ESP_OK) {
+        if (send_request(hmac_hashed, request_body)) {
             lcd_1602_send_string(handle->lcd_i2c, "Approved!");
         } else {
             lcd_1602_send_string(handle->lcd_i2c, "Declined");
         }
 
-        vTaskDelay(PLUTO_ERROR_MESSAGE_TIME_MS);
+        vTaskDelay(pdMS_TO_TICKS(PLUTO_ERROR_MESSAGE_TIME_MS));
     }
 
     lcd_1602_clear_screen(handle->lcd_i2c);
-    return false;
 }
 
 // wakeup

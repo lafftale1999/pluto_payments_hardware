@@ -16,7 +16,7 @@ void lcd_render_amount (
     uint8_t copied_chars = 0;
     uint8_t buf_index = 0;
     
-    while(*prompt != '\0' && copied_chars <= LCD_1602_SCREEN_CHAR_WIDTH) {
+    while(*prompt != '\0' && copied_chars < LCD_1602_SCREEN_CHAR_WIDTH) {
         buf[buf_index++] = *prompt;
         prompt++;
         copied_chars++;
@@ -55,8 +55,8 @@ void lcd_render_pin (
     memcpy(&lcd_buffer[0], header, header_length);
 
     size_t prompt_length = strlen(prompt);
-    if (prompt_length + max_pin_len - 1 > LCD_1602_SCREEN_CHAR_WIDTH) {
-        prompt_length = LCD_1602_SCREEN_CHAR_WIDTH - max_pin_len - 1;
+    if (prompt_length + max_pin_len> LCD_1602_SCREEN_CHAR_WIDTH) {
+        prompt_length = LCD_1602_SCREEN_CHAR_WIDTH - max_pin_len;
     }
     memcpy(&lcd_buffer[LCD_1602_SCREEN_CHAR_WIDTH], prompt, prompt_length);
 
