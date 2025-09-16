@@ -105,9 +105,11 @@ static bool send_request(char *hmac_hashed, char *request_body) {
     xTaskCreate(http_post_task, "http_post", HTTP_POST_TASK_STACK_SIZE, args, 5, NULL);
     ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
 
+    bool payment_accepted = args->status == ESP_OK;
+
     free(args);
 
-    return args->status == ESP_OK;
+    return payment_accepted;
 }
 
 static void pluto_create_values(pluto_payment *payment, char *out_buf[]) {
@@ -254,19 +256,9 @@ static bool pluto_get_amount(pluto_system_handle_t handle, pluto_payment *paymen
     uint8_t decimals_entered = 0;
     uint8_t max_decimals = 2;
 
-    configASSERT(handle && handle->event_queue);
-    ESP_LOGI(PLUTO_TAG, "After assers");
-
-    ESP_LOGD(PLUTO_TAG, "queue=%p msgs=%u spaces=%u sched=%ld",
-            (void*)handle->event_queue,
-            (unsigned)uxQueueMessagesWaiting(handle->event_queue),
-            (unsigned)uxQueueSpacesAvailable(handle->event_queue),
-            (long)xTaskGetSchedulerState());
-
     while (true) {
         
         if (!xQueueReceive(handle->event_queue, &event, pdMS_TO_TICKS(PLUTO_MENU_WAIT_TIME_MS))) break;
-        ESP_LOGI(PLUTO_TAG, "EVENT RECEIVED");
 
         if (event.event_type == EV_KEY) {
             if (event.key.key_pressed == 'A') {

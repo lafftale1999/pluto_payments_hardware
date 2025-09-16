@@ -29,7 +29,7 @@ static void on_picc_state_changed(void *arg, esp_event_base_t base, int32_t even
         };
 
         rc522_picc_uid_to_str(&picc->uid, event.rfid.cardNumber, sizeof(event.rfid.cardNumber));
-
+        ESP_LOGI("RC522", "%s", event.rfid.cardNumber);
         xQueueSend(queue, &event, portMAX_DELAY);
     }
     else if (picc->state == RC522_PICC_STATE_IDLE && event->old_state >= RC522_PICC_STATE_ACTIVE) {
