@@ -31,7 +31,7 @@ void time_get_current_time(char *buf, size_t buf_size) {
     struct tm local_time;
     localtime_r(&now, &local_time);
 
-    strftime(buf, buf_size, "%Y-%m-%d %H:%M:%S", &local_time);
+    strftime(buf, buf_size, "%Y-%m-%dT%H:%M:%S", &local_time);
     ESP_LOGI("TIME", "Local time: %s", buf);
 }
 
