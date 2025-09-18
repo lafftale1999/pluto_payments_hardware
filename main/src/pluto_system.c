@@ -70,7 +70,7 @@ typedef enum pluto_payment_keys_t {
 } pluto_payment_keys_t;
 
 // JSON KEYS
-static char *payment_keys[] = {"amount", "cardNumber", "pinCode", "currency", "timeStamp", "nonce", "operation", "deviceId"};
+static char *payment_keys[] = {"amount", "cardNumber", "pinCode", "currency", "timeStamp", "nonce", "operation", "deviceMacAddress"};
 
 // HTTP HEADERS
 typedef enum pluto_payment_http_headers {
@@ -276,7 +276,7 @@ static bool pluto_get_amount(pluto_system_handle_t handle, pluto_payment *paymen
                 // If there is amount entered
                 if (chars_entered > 0) {
                     // if its a comma
-                    if(amount[chars_entered - 1] == ',' ){
+                    if(amount[chars_entered - 1] == '.' ){
                         comma_entered = false;
                         decimals_entered = 0;
                     }
@@ -309,7 +309,7 @@ static bool pluto_get_amount(pluto_system_handle_t handle, pluto_payment *paymen
                         amount[chars_entered++] = '0';
                     }
 
-                    amount[chars_entered++] = ',';
+                    amount[chars_entered++] = '.';
                     amount[chars_entered] = '\0';
                     comma_entered = true;
                 }
