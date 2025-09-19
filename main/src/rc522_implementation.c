@@ -5,6 +5,9 @@
 #include "driver/gpio.h"
 #include "esp_err.h"
 
+#include <string.h>
+#include <ctype.h>
+
 #include "pluto_events.h"
 
 static const char *TAG = "rc522";
@@ -18,6 +21,23 @@ static const char *TAG = "rc522";
 static QueueHandle_t queue;
 static bool rc522_is_created = false;
 
+static bool rfid_check_check_card_format(char *card_number, size_t str_size) {
+    card_number[str_size - 1] = '\0';
+
+    while(*card_number != '\0') {
+        if (isdigit((unsigned char)*card_number) ||
+            isascii((unsigned char)*card_number) ||
+            *card_number == ' ') {
+                card_number++;
+                continue;
+            } else {
+                return false;
+            }
+    }
+
+    return true;
+}
+
 static void on_picc_state_changed(void *arg, esp_event_base_t base, int32_t event_id, void *data)
 {
     rc522_picc_state_changed_event_t *event = (rc522_picc_state_changed_event_t *)data;
@@ -29,7 +49,13 @@ static void on_picc_state_changed(void *arg, esp_event_base_t base, int32_t even
         };
 
         rc522_picc_uid_to_str(&picc->uid, event.rfid.cardNumber, sizeof(event.rfid.cardNumber));
+        
         ESP_LOGI("RC522", "%s", event.rfid.cardNumber);
+        
+        if(!rfid_check_check_card_format(event.rfid.cardNumber, sizeof(event.rfid.cardNumber))) {
+            event.event_type = EV_SCAN_FAILED;
+        }
+
         xQueueSend(queue, &event, portMAX_DELAY);
     }
     else if (picc->state == RC522_PICC_STATE_IDLE && event->old_state >= RC522_PICC_STATE_ACTIVE) {

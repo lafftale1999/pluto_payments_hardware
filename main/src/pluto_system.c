@@ -233,6 +233,10 @@ static bool pluto_get_card_number(pluto_system_handle_t handle, pluto_payment *p
             card_scanned = true;
             break;
         }
+        else if (event.event_type == EV_SCAN_FAILED) {
+            lcd_1602_send_string(handle->lcd_i2c, "Unkown provider\nOnly Pluto Card");
+            continue;
+        }
         else if (event.event_type == EV_KEY) {
             if (event.key.key_pressed == 'C') {
                 lcd_1602_send_string(handle->lcd_i2c, "Payment canceled");
