@@ -40,7 +40,6 @@ typedef enum pluto_system_state {
     SYS_WAITING,
     SYS_CREATE_PAYMENT,
     SYS_MAKE_PAYMENT,
-    SYS_CHECK_PAYMENT,
     SYS_WIFI_RECONNECTED
 } pluto_system_state;
 
@@ -92,6 +91,8 @@ typedef struct pluto_system {
 } pluto_system;
 
 static bool send_request(pluto_system_handle_t handle, char *hmac_hashed, char *request_body) {
+    pluto_update_state(handle, SYS_MAKE_PAYMENT);
+    
     http_request_args_t *args = calloc(1, sizeof(*args));
     args->caller = xTaskGetCurrentTaskHandle();
     args->status = ESP_FAIL;
@@ -343,6 +344,8 @@ static bool pluto_get_amount(pluto_system_handle_t handle, pluto_payment *paymen
 // create payment
 static void pluto_create_payment(pluto_system_handle_t handle) {
 
+    pluto_update_state(handle, SYS_CREATE_PAYMENT);
+
     pluto_payment payment = {
         .operation = "send_payment"
     };
@@ -400,6 +403,7 @@ static void pluto_run_menu(pluto_system_handle_t handle) {
     pluto_event_handle_t event;
     
     pluto_update_state(handle, SYS_WAITING);
+
     lcd_1602_send_string(handle->lcd_i2c, "A:New payment\nC:Cancel");
 
     while(true) {
