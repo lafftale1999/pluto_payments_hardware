@@ -70,7 +70,7 @@ typedef enum pluto_payment_keys_t {
 } pluto_payment_keys_t;
 
 // JSON KEYS
-static char *payment_keys[] = {"amount", "cardNumber", "pinCode", "currency", "timeStamp", "nonce", "operation", "deviceId"};
+static char *payment_keys[] = {"amount", "cardNumber", "pinCode", "currency", "timeStamp", "nonce", "operation", "deviceMacAddress"};
 
 // HTTP HEADERS
 typedef enum pluto_payment_http_headers {
@@ -369,11 +369,14 @@ static void pluto_create_payment(pluto_system_handle_t handle) {
         char canonical_string[CANONICAL_STRING_SIZE] = {0};
         char hmac_hashed[SHA256_OUT_BUF_SIZE] = {0};
         build_canonical_string(hashed_body, canonical_string, sizeof(canonical_string));
+
+        ESP_LOGI(PLUTO_TAG, "CANONICAL STRING\n%s", canonical_string);
+
         strncat(canonical_string, device_key, sizeof(canonical_string) - strlen(canonical_string));
         hash_sha256((const unsigned char*) canonical_string, strlen(canonical_string), hmac_hashed);
         
         ESP_LOGI(PLUTO_TAG, "HMAC: %s", hmac_hashed);
-        
+
         if (send_request(hmac_hashed, request_body)) {
             lcd_1602_send_string(handle->lcd_i2c, "Approved!");
         } else {
