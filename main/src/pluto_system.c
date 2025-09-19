@@ -91,7 +91,7 @@ typedef struct pluto_system {
     i2c_master_dev_handle_t lcd_i2c;
 } pluto_system;
 
-static bool send_request(char *hmac_hashed, char *request_body) {
+static bool send_request(pluto_system_handle_t handle, char *hmac_hashed, char *request_body) {
     http_request_args_t *args = calloc(1, sizeof(*args));
     args->caller = xTaskGetCurrentTaskHandle();
     args->status = ESP_FAIL;
@@ -106,6 +106,12 @@ static bool send_request(char *hmac_hashed, char *request_body) {
     ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
 
     bool payment_accepted = args->status == ESP_OK;
+
+    if (strlen(args->response_buffer) > 32) {
+        lcd_1602_send_string(handle->lcd_i2c, "Unkown Error\nTry again...");
+    } else {
+        lcd_1602_send_string(handle->lcd_i2c, args->response_buffer);
+    }
 
     free(args);
 
@@ -376,12 +382,8 @@ static void pluto_create_payment(pluto_system_handle_t handle) {
         hash_sha256((const unsigned char*) canonical_string, strlen(canonical_string), hmac_hashed);
         
         ESP_LOGI(PLUTO_TAG, "HMAC: %s", hmac_hashed);
-
-        if (send_request(hmac_hashed, request_body)) {
-            lcd_1602_send_string(handle->lcd_i2c, "Approved!");
-        } else {
-            lcd_1602_send_string(handle->lcd_i2c, "Declined");
-        }
+        
+        send_request(handle, hmac_hashed, request_body);
 
         vTaskDelay(pdMS_TO_TICKS(PLUTO_ERROR_MESSAGE_TIME_MS));
     }
