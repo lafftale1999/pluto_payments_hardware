@@ -27,7 +27,7 @@
 
 #include "sdkconfig.h"
 #include "include/time_sync.h"
-#include "config.h"
+#include "credentials.h"
 
 static const char *TAG = "HTTPS";
 
@@ -146,7 +146,7 @@ void https_send_with_cert(https_request_args_t *args)
 
         .clientcert_buf = (const unsigned char*) pluto_cert_pem_start,
         .clientcert_bytes = pluto_cert_pem_end - pluto_cert_pem_start,
-        
+
         .clientkey_buf = (const unsigned char*) pluto_key_pem_start,
         .clientkey_bytes = pluto_key_pem_end - pluto_key_pem_start
     };
@@ -154,7 +154,7 @@ void https_send_with_cert(https_request_args_t *args)
     https_send_request(cfg, args);
 }
 
-void https_request_task(void *pvparameters)
+void https_post_task(void *pvparameters)
 {
     https_request_args_t *args = (https_request_args_t*) pvparameters;
     
@@ -185,16 +185,10 @@ void build_request_body(const char** keys, const char **values, size_t amount_of
     strncat(request_body, "}", REQUEST_BODY_SIZE - strlen(request_body) - 1);
 }
 
-void set_request_path(https_request_args_t *args, const char *path) {
-    memset(args->path, 0, MAX_PATH_LENGTH);
-    snprintf(args->path, MAX_PATH_LENGTH, "%s", path);
-}
-
 void set_request_url(https_request_args_t *args) {
     memset(args->url, 0, HTTPS_MAX_URL_SIZE);
-    snprintf(args->url, HTTPS_MAX_URL_SIZE, "https://%s%s", SERVER_HOST, args->path);
+    snprintf(args->url, HTTPS_MAX_URL_SIZE, "https://%s%s", SERVER_HOST, PLUTO_PAYMENT_API);
 }
-
 
 void log_http_request(const char *request) {
     if (request != NULL) {
@@ -207,34 +201,27 @@ void log_http_request(const char *request) {
 esp_err_t build_request(https_request_args_t *args) {
     memset(args->request, 0, MAX_HTTPS_REQUEST_BUFFER +1);
     
-    char request_type[10];
     char *content_type = "";
     char content_length[64] = "";
 
-    if(args->https_request_type == POST) {
-        snprintf(request_type, sizeof(request_type), "POST");
-        content_type = "Content-Type: application/json\r\n";
-        snprintf(content_length, sizeof(content_length),
-                "Content-Length: %d\r\n", (int)strlen(args->request_body));
-    }
-    else if(args->https_request_type == GET) {
-        snprintf(request_type, sizeof(request_type), "GET");
-    }
+    content_type = "Content-Type: application/json\r\n";
+    snprintf(content_length, sizeof(content_length),
+            "Content-Length: %d\r\n", (int)strlen(args->request_body));
 
     int written = snprintf(args->request, MAX_HTTPS_REQUEST_BUFFER + 1,
-        "%s %s HTTP/1.1\r\n"
+        "POST %s HTTP/1.1\r\n"
         "Host: %s\r\n"
+        "Authorization: %s\r\n"
         "User-Agent: esp-idf/1.0 esp32\r\n"
         "Connection: close\r\n"
-        "%s"
-        "%s"
-        "\r\n"
+        "Content-Type: application/json\r\n"
+        "%s\r\n"
         "%s",
-        request_type, args->path, 
+        PLUTO_PAYMENT_API, 
         SERVER_HOST,
-        content_type,
+        args->hmac,
         content_length,
-        (args->https_request_type == POST) ? args->request_body : "");
+        args->request_body);
     
     if (written < 0 || written >= MAX_HTTPS_REQUEST_BUFFER + 1) {
         return ESP_FAIL; // Förfrågan var för lång
@@ -245,42 +232,30 @@ esp_err_t build_request(https_request_args_t *args) {
     return ESP_OK;
 }
 
-void config_scan_post_request(https_request_args_t *args, scanned_picc_data_t *data) {
-    if (args->https_request_type != POST) {
-        ESP_LOGE(TAG, "Called config_scan_post_request() without POST request type set");
-        return;
+esp_err_t https_create_and_send_request(const char **keys, const char **values, uint8_t list_len, char *hmac) {
+    https_request_args_t *args = (https_request_args_t*)calloc(1, sizeof(https_request_args_t));
+
+    if (args == NULL) {
+        ESP_LOGE(TAG, "Unable to heap allocate args");
+        return ESP_FAIL;
     }
 
-    const char *keys[] = {
-        "deviceID",
-        "devicePassword",
-        "tagID"
-    };
-
-    const char *values[] = {
-        DEVICE_ID,
-        DEVICE_PASSWORD,
-        data->sha_256_hex
-    };
-    build_post_request(args, keys, values, 3);
-    
-}
-
-void build_post_request(https_request_args_t *args, const char **keys, const char **values, uint8_t list_len) {
-    char *event_type = "";
-
-    switch(args->event) {
-        case TAG_SCANNED:
-            event_type = "/card/scan";
-            break;
-
-        default:
-            ESP_LOGE(TAG, "Unkown type in build_post_request");
-            return;
-    }
+    snprintf(args->hmac, sizeof(args->hmac), "%s", hmac);
+    args->caller = xTaskGetCurrentTaskHandle();
+    args->status = ESP_FAIL;
+    args->https_request_type = POST;
 
     build_request_body(keys, values, list_len, args->request_body);
-    set_request_path(args, event_type);
     set_request_url(args);
     build_request(args);
+
+    xTaskCreate(https_post_task, "https_post_task", HTTPS_TASK_STACK_DEPTH, args, 5, NULL);
+
+    ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+
+    esp_err_t post_status = args->status;
+
+    free(args);
+
+    return post_status;
 }
