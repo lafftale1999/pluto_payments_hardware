@@ -12,6 +12,7 @@
 #include "https_implementation.h"
 #include "lcd_render.h"
 #include "credentials.h"
+#include "project_config.h"
 
 #include <ctype.h>
 #include <string.h>

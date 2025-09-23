@@ -4,6 +4,7 @@
 #include "rc522_picc.h"
 #include "driver/gpio.h"
 #include "esp_err.h"
+#include "project_config.h"
 
 #include <string.h>
 #include <ctype.h>
@@ -11,12 +12,6 @@
 #include "pluto_events.h"
 
 static const char *TAG = "rc522";
-
-#define RC522_SPI_BUS_GPIO_MISO    GPIO_NUM_19
-#define RC522_SPI_BUS_GPIO_MOSI    GPIO_NUM_23
-#define RC522_SPI_BUS_GPIO_SCLK    GPIO_NUM_18
-#define RC522_SPI_SCANNER_GPIO_SDA GPIO_NUM_5
-#define RC522_SCANNER_GPIO_RST     (-1) // soft-reset
 
 static QueueHandle_t queue;
 static bool rc522_is_created = false;
