@@ -136,6 +136,13 @@ Create this file in [main/include/](main/include/)-directory and set up your cre
 #endif
 ```
 
+#### 2.3. Certificates and keys
+For this solution you need the following:
+* `client-cert.pem`
+* `client-key.pem`
+* `ca-cert.pem`
+
+> **Note:** The client key and cert need to be signed by the same CA as `ca-cert.pem`. The server receiving the certificates also need to have it's own certificates (often keystore) signed by the same CA.
 ## Circuit Diagram
 
 The project relies on the following components:  
