@@ -19,4 +19,8 @@ idf_component_register(
         mbedtls
         esp_http_client
         lwip
+        esp_timer
+        esp-tls
+
+    EMBED_TXTFILES "certs/ca-cert.pem" "certs/client-cert.pem" "certs/client-key.pem"
 )

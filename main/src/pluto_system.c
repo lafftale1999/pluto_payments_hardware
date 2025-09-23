@@ -9,6 +9,7 @@
 #include "security_measures.h"
 #include "request_formater.h"
 #include "http_implementation.h"
+#include "https_implementation.h"
 #include "lcd_render.h"
 #include "credentials.h"
 
@@ -40,7 +41,6 @@ typedef enum pluto_system_state {
     SYS_WAITING,
     SYS_CREATE_PAYMENT,
     SYS_MAKE_PAYMENT,
-    SYS_CHECK_PAYMENT,
     SYS_WIFI_RECONNECTED
 } pluto_system_state;
 
@@ -92,30 +92,13 @@ typedef struct pluto_system {
 } pluto_system;
 
 static bool send_request(pluto_system_handle_t handle, char *hmac_hashed, char *request_body) {
-    http_request_args_t *args = calloc(1, sizeof(*args));
-    args->caller = xTaskGetCurrentTaskHandle();
-    args->status = ESP_FAIL;
-
-    snprintf(args->hmac, sizeof(args->hmac), "%s", hmac_hashed);
-    snprintf(args->post_data, sizeof(args->post_data), "%s", request_body);
-    snprintf(args->url, sizeof(args->url), "%s%s", PLUTO_URL, PLUTO_PAYMENT_API);
+    char response_out[33];
     
-    ESP_LOGI(PLUTO_TAG, "%s", args->url);
+    esp_err_t ret = https_create_and_send_request(request_body, hmac_hashed, response_out, sizeof(response_out));
 
-    xTaskCreate(http_post_task, "http_post", HTTP_POST_TASK_STACK_SIZE, args, 5, NULL);
-    ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+    lcd_1602_send_string(handle->lcd_i2c, response_out);
 
-    bool payment_accepted = args->status == ESP_OK;
-
-    if (strlen(args->response_buffer) > 32) {
-        lcd_1602_send_string(handle->lcd_i2c, "Unkown Error\nTry again...");
-    } else {
-        lcd_1602_send_string(handle->lcd_i2c, args->response_buffer);
-    }
-
-    free(args);
-
-    return payment_accepted;
+    return ret == ESP_OK;
 }
 
 static void pluto_create_values(pluto_payment *payment, char *out_buf[]) {
@@ -152,8 +135,6 @@ static void get_mac_address(pluto_payment *payment) {
     esp_efuse_mac_get_default(mac);
     
     snprintf(payment->device_id, sizeof(payment->device_id), "%02X:%02X:%02X:%02X:%02X:%02X", mac[0],mac[1],mac[2],mac[3],mac[4],mac[5]);
-
-    ESP_LOGI(PLUTO_TAG, "%s", payment->device_id);
 }
 
 static bool pluto_get_pin_code(pluto_system_handle_t handle, pluto_payment *payment) {
@@ -251,7 +232,6 @@ static bool pluto_get_card_number(pluto_system_handle_t handle, pluto_payment *p
 }
 
 static bool pluto_get_amount(pluto_system_handle_t handle, pluto_payment *payment) {
-    ESP_LOGI(PLUTO_TAG, "Entered get amount");
 
     pluto_event_handle_t event;
     
@@ -329,12 +309,9 @@ static bool pluto_get_amount(pluto_system_handle_t handle, pluto_payment *paymen
         }
 
         else if (event.event_type == EV_WIFI) {
-            ESP_LOGI(PLUTO_TAG, "Wifi event received");
             pluto_wifi_state_logic(handle, event);
             break;
         }
-
-        ESP_LOGI(PLUTO_TAG, "Bottom of loop");
     }
 
     return false;
@@ -343,11 +320,11 @@ static bool pluto_get_amount(pluto_system_handle_t handle, pluto_payment *paymen
 // create payment
 static void pluto_create_payment(pluto_system_handle_t handle) {
 
+    pluto_update_state(handle, SYS_CREATE_PAYMENT);
+
     pluto_payment payment = {
         .operation = "send_payment"
     };
-
-    ESP_LOGI(PLUTO_TAG, "Entered create payment");
 
     if (pluto_get_amount(handle, &payment) &&
         pluto_get_card_number(handle, &payment) &&
@@ -366,13 +343,10 @@ static void pluto_create_payment(pluto_system_handle_t handle) {
         char request_body[HTTP_REQUEST_BODY_SIZE] = {0};
         pluto_create_values(&payment, payment_values);
         create_request_body((const char **)payment_keys, (const char **)payment_values, PAYMENT_KEY_SIZE, request_body, sizeof(request_body));
-
-        ESP_LOGI(PLUTO_TAG, "%s", request_body);
         
         // hash body
         char hashed_body[SHA256_OUT_BUF_SIZE] = {0};
         hash_sha256((const unsigned char*) request_body, strlen(request_body), hashed_body);
-        ESP_LOGI(PLUTO_TAG, "Hashed Body: %s", hashed_body);
 
         // create HMAC
         char device_key[] = DEVICE_KEY;
@@ -380,12 +354,8 @@ static void pluto_create_payment(pluto_system_handle_t handle) {
         char hmac_hashed[SHA256_OUT_BUF_SIZE] = {0};
         build_canonical_string(hashed_body, canonical_string, sizeof(canonical_string));
 
-        ESP_LOGI(PLUTO_TAG, "CANONICAL STRING\n%s", canonical_string);
-
         strncat(canonical_string, device_key, sizeof(canonical_string) - strlen(canonical_string));
         hash_sha256((const unsigned char*) canonical_string, strlen(canonical_string), hmac_hashed);
-        
-        ESP_LOGI(PLUTO_TAG, "HMAC: %s", hmac_hashed);
         
         send_request(handle, hmac_hashed, request_body);
 
@@ -400,6 +370,7 @@ static void pluto_run_menu(pluto_system_handle_t handle) {
     pluto_event_handle_t event;
     
     pluto_update_state(handle, SYS_WAITING);
+
     lcd_1602_send_string(handle->lcd_i2c, "A:New payment\nC:Cancel");
 
     while(true) {
@@ -412,10 +383,6 @@ static void pluto_run_menu(pluto_system_handle_t handle) {
             }
             else if (event.key.key_pressed == 'C') {
                 break;
-            }
-            else if (event.key.key_pressed == '#') {
-                char time[TIME_STRING_SIZE];
-                time_get_current_time(time, sizeof(time));
             }
         }
 
