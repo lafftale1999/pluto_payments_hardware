@@ -6,9 +6,7 @@
 #include <time.h>
 #include <sys/time.h>
 #include <stdbool.h>
-#include "freertos/FreeRTOS.h"
-#include "freertos/task.h"
-#include "freertos/event_groups.h"
+
 #include "esp_wifi.h"
 #include "esp_event.h"
 #include "esp_log.h"
@@ -69,7 +67,6 @@ void https_send_request(esp_tls_cfg_t cfg, https_request_args_t *args)
         goto cleanup;
     }
 
-    // Skickar request
     size_t written_bytes = 0;
     do {
         ret = esp_tls_conn_write(tls,
@@ -86,8 +83,6 @@ void https_send_request(esp_tls_cfg_t cfg, https_request_args_t *args)
 
     memset(args->response_buffer, 0, MAX_HTTPS_OUTPUT_BUFFER);
 
-    // Läser HTTP svar
-    ESP_LOGI(TAG, "Reading HTTP response...");
     do {
         len = sizeof(buf) - 1;
         memset(buf, 0x00, sizeof(buf));
@@ -103,17 +98,15 @@ void https_send_request(esp_tls_cfg_t cfg, https_request_args_t *args)
             break;
         }
 
-        buf[ret] = '\0'; // nollterminera för strtok
+        buf[ret] = '\0';
 
-        // 🔍 Läs statusraden från första chunken
         if (!got_status_line) {
             got_status_line = true;
             args->status = ESP_FAIL;
 
             char *status_line = strtok((char *)buf, "\r\n");
             if (status_line && strncmp(status_line, "HTTP/", 5) == 0) {
-                int status_code = atoi(status_line + 9);  // hoppa till status siffran
-                ESP_LOGI(TAG, "HTTP status code: %d", status_code);
+                int status_code = atoi(status_line + 9);
 
                 args->status = (status_code == 200) ? ESP_OK : ESP_FAIL;
             }
@@ -139,7 +132,6 @@ cleanup:
 
 void https_send_with_cert(https_request_args_t *args)
 {
-    ESP_LOGI(TAG, "https_request using cacert_buf");
     esp_tls_cfg_t cfg = {
         .cacert_buf = (const unsigned char *) ca_root_cert_pem_start,
         .cacert_bytes = ca_root_cert_pem_end - ca_root_cert_pem_start,
@@ -166,47 +158,17 @@ void https_post_task(void *pvparameters)
     vTaskDelete(NULL);
 }
 
-void build_request_body(const char** keys, const char **values, size_t amount_of_values, char* request_body) {
-    memset(request_body, 0, REQUEST_BODY_SIZE);
-
-    snprintf(request_body, REQUEST_BODY_SIZE, "{");
-
-    for(size_t i = 0; i < amount_of_values; i++) {
-        strncat(request_body, "\"", REQUEST_BODY_SIZE - strlen(request_body) - 1);
-        strncat(request_body, keys[i], REQUEST_BODY_SIZE - strlen(request_body) - 1);
-        strncat(request_body, "\":\"", REQUEST_BODY_SIZE - strlen(request_body) - 1);
-        strncat(request_body, values[i], REQUEST_BODY_SIZE - strlen(request_body) - 1);
-        strncat(request_body, "\"", REQUEST_BODY_SIZE - strlen(request_body) - 1);
-        if(i < amount_of_values - 1) {
-            strncat(request_body, ",", REQUEST_BODY_SIZE - strlen(request_body) - 1);
-        }
-    }
-
-    strncat(request_body, "}", REQUEST_BODY_SIZE - strlen(request_body) - 1);
-}
-
 void set_request_url(https_request_args_t *args) {
     memset(args->url, 0, HTTPS_MAX_URL_SIZE);
     snprintf(args->url, HTTPS_MAX_URL_SIZE, "https://%s%s", SERVER_HOST, PLUTO_PAYMENT_API);
 }
 
-void log_http_request(const char *request) {
-    if (request != NULL) {
-        ESP_LOGI(TAG, "Generated HTTP Request:\n%s", request);
-    } else {
-        ESP_LOGW(TAG, "Request buffer is NULL");
-    }
-}
-
 esp_err_t build_request(https_request_args_t *args) {
     memset(args->request, 0, MAX_HTTPS_REQUEST_BUFFER +1);
     
-    char *content_type = "";
     char content_length[64] = "";
-
-    content_type = "Content-Type: application/json\r\n";
     snprintf(content_length, sizeof(content_length),
-            "Content-Length: %d\r\n", (int)strlen(args->request_body));
+            "Content-Length: %d", (int)strlen(args->request_body));
 
     int written = snprintf(args->request, MAX_HTTPS_REQUEST_BUFFER + 1,
         "POST %s HTTP/1.1\r\n"
@@ -216,6 +178,7 @@ esp_err_t build_request(https_request_args_t *args) {
         "Connection: close\r\n"
         "Content-Type: application/json\r\n"
         "%s\r\n"
+        "\r\n"
         "%s",
         PLUTO_PAYMENT_API, 
         SERVER_HOST,
@@ -224,15 +187,21 @@ esp_err_t build_request(https_request_args_t *args) {
         args->request_body);
     
     if (written < 0 || written >= MAX_HTTPS_REQUEST_BUFFER + 1) {
-        return ESP_FAIL; // Förfrågan var för lång
+        ESP_LOGE(TAG, "Unable to create request");
+        return ESP_FAIL;
     }
-    ESP_LOGI(TAG, "%s", args->url);
-    log_http_request(args->request);
 
     return ESP_OK;
 }
 
-esp_err_t https_create_and_send_request(const char **keys, const char **values, uint8_t list_len, char *hmac) {
+// Solution found online for extracting body from http response
+static char* extract_body(char *resp) {
+    char *p = strstr(resp, "\r\n\r\n");
+    if (!p) p = strstr(resp, "\n\n");
+    return p ? p + ((p[1] == '\n' && p[-1] == '\r') ? 4 : 2) : resp;
+}
+
+esp_err_t https_create_and_send_request(char *request_body, char *hmac, char *out, size_t out_size) {
     https_request_args_t *args = (https_request_args_t*)calloc(1, sizeof(https_request_args_t));
 
     if (args == NULL) {
@@ -241,11 +210,11 @@ esp_err_t https_create_and_send_request(const char **keys, const char **values, 
     }
 
     snprintf(args->hmac, sizeof(args->hmac), "%s", hmac);
+    snprintf(args->request_body, sizeof(args->request_body), "%s", request_body);
     args->caller = xTaskGetCurrentTaskHandle();
     args->status = ESP_FAIL;
     args->https_request_type = POST;
 
-    build_request_body(keys, values, list_len, args->request_body);
     set_request_url(args);
     build_request(args);
 
@@ -254,6 +223,34 @@ esp_err_t https_create_and_send_request(const char **keys, const char **values, 
     ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
 
     esp_err_t post_status = args->status;
+
+    char *temp_body = extract_body(args->response_buffer);
+    char body[HTTPS_MAX_RESPONSE_BODY_LCD] = {0};
+    size_t body_index = 0;
+
+    // TRIM STARTING CRLF
+    while (*temp_body == '\r' || *temp_body == '\n') temp_body++;
+
+    while (*temp_body && isascii((unsigned char)*temp_body) && body_index < sizeof(body) - 1) {
+        unsigned char c = (unsigned char)*temp_body++;
+
+        // REMOVE CR
+        if (c == '\r') continue;
+
+        body[body_index++] = (char)c;
+    }
+
+    // TRIM CRLF
+    while (body_index && (body[body_index-1] == '\n' || body[body_index-1] == '\r')) {
+        body_index--;
+    }
+    body[body_index] = '\0';
+
+    if (strlen(body) > 32) {
+        snprintf(out, out_size, "Unkown error");
+    } else {
+        snprintf(out, out_size, "%s", body);
+    }
 
     free(args);
 
